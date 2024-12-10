@@ -1,7 +1,11 @@
 import tensorflow as tf
+from keras.src import activations
+
+from pre_process import load_and_preprocess_image
+
 
 class PatchEmbed(tf.keras.layers.Layer):
-    def __init__(self, patch_size, embed_dim, stride=16, activation=tf.keras.layers.ReLU()):
+    def __init__(self, activation, patch_size, embed_dim, stride=16):
         super(PatchEmbed, self).__init__()
         self.patch_size = patch_size
         self.embed_dim = embed_dim
@@ -9,6 +13,7 @@ class PatchEmbed(tf.keras.layers.Layer):
         self.activation = activation
 
         # 使用深度可分离卷积
+        # 可考虑替换为标准卷积，或增加卷积核数目以提升模型表达能力
         self.conv1 = tf.keras.layers.SeparableConv2D(
             filters=self.embed_dim,
             kernel_size=self.patch_size,
@@ -59,11 +64,11 @@ class TransformerEncoderLayer(tf.keras.layers.Layer):
 
 
 class VisionTransformer(tf.keras.Model):
-    def __init__(self, img_size=224, patch_size=16, embed_dim=768, num_heads=12, num_layers=12, ff_dim=2048, num_classes=1000):
+    def __init__(self, activation, img_size=224, patch_size=16, embed_dim=768, num_heads=12, num_layers=12, ff_dim=2048, num_classes=1000):
         super(VisionTransformer, self).__init__()
 
         # Patch嵌入层
-        self.patch_embed = PatchEmbed(patch_size=patch_size, embed_dim=embed_dim, stride=patch_size)
+        self.patch_embed = PatchEmbed(patch_size=patch_size, embed_dim=embed_dim, stride=patch_size, activation=activation)
 
         # 位置编码层，使用可学习的位置编码
         num_patches = (img_size // patch_size) ** 2
@@ -96,6 +101,7 @@ class VisionTransformer(tf.keras.Model):
             x = encoder_layer(x)
 
         # 对输出进行池化（例如取均值池化）
+        # 可根据需求替换为更复杂的池化策略（例如最大池化或加权池化）
         x = tf.reduce_mean(x, axis=1)  # (batch_size, embed_dim)
 
         # 分类头输出
@@ -105,11 +111,6 @@ class VisionTransformer(tf.keras.Model):
 
 
 # 创建模型实例
-model = VisionTransformer(img_size=224, patch_size=16, embed_dim=768, num_heads=12, num_layers=12, ff_dim=2048, num_classes=1000)
+model = VisionTransformer(img_size=224, patch_size=8, embed_dim=512, num_heads=8, num_layers=6, ff_dim=1024, num_classes=1000, activation=activations.swish)
 
-# 使用真实数据来触发模型的构建
-input_data = tf.random.normal((5, 224, 224, 3))  # 模拟5张224x224 RGB图像
-model(input_data)  # 通过给模型传入输入数据来触发模型的构建
 
-# 查看模型的结构
-model.summary()
