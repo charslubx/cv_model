@@ -1,116 +1,159 @@
-import tensorflow as tf
-from keras.src import activations
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torch_geometric
+from skimage import segmentation, color, io
+import matplotlib.pyplot as plt
+from sklearn.preprocessing import normalize
 
-from pre_process import load_and_preprocess_image
+# 读取图像
+image = io.imread('image_1.jpg')  # <---- 自定义图像路径
 
+# 超像素分割（使用 SLIC 算法）
+segments = segmentation.slic(image, n_segments=100, compactness=10)  # <---- 自定义超像素数量和紧凑度
 
-class PatchEmbed(tf.keras.layers.Layer):
-    def __init__(self, activation, patch_size, embed_dim, stride=16):
-        super(PatchEmbed, self).__init__()
-        self.patch_size = patch_size
-        self.embed_dim = embed_dim
-        self.stride = stride
-        self.activation = activation
+# 显示分割后的图像
+plt.imshow(segmentation.mark_boundaries(image, segments))
+plt.show()
 
-        # 使用深度可分离卷积
-        # 可考虑替换为标准卷积，或增加卷积核数目以提升模型表达能力
-        self.conv1 = tf.keras.layers.SeparableConv2D(
-            filters=self.embed_dim,
-            kernel_size=self.patch_size,
-            strides=self.stride,
-            padding='same',
-            activation=None
-        )
+# 获取每个超像素的特征
+def get_superpixel_features(image, segments):
+    num_segments = np.max(segments) + 1
+    features = np.zeros((num_segments, 3))  # 假设我们用 RGB 特征
+    for i in range(num_segments):
+        region_mask = (segments == i)
+        region_pixels = image[region_mask]
+        features[i] = np.mean(region_pixels, axis=0)  # <---- 自定义特征提取方法（例如平均颜色）
+    return features
 
-        self.act = self.activation
+# 获取超像素特征
+features = get_superpixel_features(image, segments)
 
-    def call(self, x):
-        x = self.conv1(x)
-        x = self.act(x)
+# 归一化特征（L2 归一化）
+features = torch.tensor(features, dtype=torch.float32)
+features = torch.nn.functional.normalize(features, p=2, dim=1)
+
+# 将特征转换为 tensor
+features_tensor = torch.tensor(features, dtype=torch.float)
+
+# 基于超像素的空间邻接关系构建图
+def build_adjacency_matrix(segments):
+    num_segments = np.max(segments) + 1
+    adjacency_matrix = np.zeros((num_segments, num_segments))
+
+    # 遍历相邻的超像素区域，构建邻接矩阵
+    for i in range(segments.shape[0] - 1):
+        for j in range(segments.shape[1] - 1):
+            # 获取当前像素所在的超像素
+            curr_segment = segments[i, j]
+            # 获取右邻居和下邻居的超像素
+            right_segment = segments[i, j + 1] if j + 1 < segments.shape[1] else curr_segment
+            down_segment = segments[i + 1, j] if i + 1 < segments.shape[0] else curr_segment
+
+            # 在邻接矩阵中标记邻接关系
+            adjacency_matrix[curr_segment, right_segment] = 1
+            adjacency_matrix[curr_segment, down_segment] = 1
+
+    # 对邻接矩阵进行归一化
+    adjacency_matrix = normalize(adjacency_matrix, norm='l1', axis=1)
+    return adjacency_matrix
+
+# 获取邻接矩阵
+adjacency_matrix = build_adjacency_matrix(segments)
+
+# 将邻接矩阵转换为 tensor
+edge_index = torch.tensor(np.array(np.nonzero(adjacency_matrix)), dtype=torch.long)
+
+# 创建数据对象
+from torch_geometric.data import Data
+data = Data(x=features_tensor, edge_index=edge_index)
+
+# GCN 模型
+import torch_geometric.nn as gnn
+
+class GCN(nn.Module):
+    def __init__(self, input_dim, hidden_dim, output_dim):
+        super(GCN, self).__init__()
+        self.conv1 = gnn.GCNConv(input_dim, hidden_dim)  # <---- 可调整隐藏层维度
+        self.conv2 = gnn.GCNConv(hidden_dim, output_dim)  # <---- 可调整输出层维度
+        self.fc = nn.Linear(output_dim, 10)  # 假设有 10 类 <---- 自定义类别数量
+
+    def forward(self, data):
+        x, edge_index = data.x, data.edge_index
+        # GCN 层
+        x = self.conv1(x, edge_index)
+        x = torch.relu(x)
+        x = self.conv2(x, edge_index)
+        x = torch.relu(x)
+        # 分类层
+        x = self.fc(x)
         return x
 
+# 创建模型
+model = GCN(input_dim=3, hidden_dim=64, output_dim=32)  # <---- 可调整输入、隐藏、输出维度
 
-class TransformerEncoderLayer(tf.keras.layers.Layer):
-    def __init__(self, embed_dim, num_heads, ff_dim, dropout=0.1):
-        super(TransformerEncoderLayer, self).__init__()
+# 并行神经网络与多头注意力机制
+class ParallelAttentionNN(nn.Module):
+    def __init__(self, input_dim, hidden_dim, output_dim, num_heads=4):
+        super(ParallelAttentionNN, self).__init__()
+        # 并行神经网络
+        self.parallel_layers = nn.ModuleList([nn.Linear(input_dim, hidden_dim) for _ in range(num_heads)])  # <---- 可调整并行层数和隐藏层维度
+        # 多头注意力机制
+        self.attention = nn.MultiheadAttention(embed_dim=hidden_dim, num_heads=num_heads)  # <---- 可调整注意力头数
+        self.fc = nn.Linear(hidden_dim, output_dim)  # <---- 自定义输出维度
 
-        self.attention = tf.keras.layers.MultiHeadAttention(
-            num_heads=num_heads,
-            key_dim=embed_dim,
-            dropout=dropout
-        )
-        self.ffn = tf.keras.Sequential([
-            tf.keras.layers.Dense(ff_dim, activation='relu'),
-            tf.keras.layers.Dense(embed_dim)
-        ])
+    def forward(self, x):
+        # 并行处理
+        outputs = [layer(x) for layer in self.parallel_layers]
+        outputs = torch.stack(outputs, dim=1)
 
-        self.layernorm1 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
-        self.layernorm2 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
-        self.dropout1 = tf.keras.layers.Dropout(dropout)
-        self.dropout2 = tf.keras.layers.Dropout(dropout)
+        # 多头注意力机制
+        attn_output, _ = self.attention(outputs, outputs, outputs)
 
-    def call(self, x, mask=None):
-        # Multi-Head Attention
-        attn_output = self.attention(x, x, x, attention_mask=mask)
-        attn_output = self.dropout1(attn_output)
-        out1 = self.layernorm1(x + attn_output)  # 残差连接
+        # 聚合并分类
+        out = attn_output.mean(dim=1)
+        out = self.fc(out)
+        return out
 
-        # Feedforward Network
-        ffn_output = self.ffn(out1)
-        ffn_output = self.dropout2(ffn_output)
-        out2 = self.layernorm2(out1 + ffn_output)  # 残差连接
+# 添加并行注意力层到模型中
+model_with_attention = ParallelAttentionNN(input_dim=32, hidden_dim=64, output_dim=10)  # <---- 可调整输入、隐藏、输出维度
 
-        return out2
+# 模拟标签
+labels = torch.randint(0, 10, (features.shape[0],))  # <---- 自定义标签数量与类别
 
+# 损失函数和优化器
+criterion = nn.CrossEntropyLoss()  # <---- 自定义损失函数
+optimizer = optim.Adam(model.parameters(), lr=0.01)  # <---- 自定义学习率
 
-class VisionTransformer(tf.keras.Model):
-    def __init__(self, activation, img_size=224, patch_size=16, embed_dim=768, num_heads=12, num_layers=12, ff_dim=2048, num_classes=1000):
-        super(VisionTransformer, self).__init__()
+# 训练过程
+def train(model, data, labels):
+    model.train()
+    optimizer.zero_grad()
+    out = model(data)
+    loss = criterion(out, labels)
+    loss.backward()
+    optimizer.step()
+    return loss.item()
 
-        # Patch嵌入层
-        self.patch_embed = PatchEmbed(patch_size=patch_size, embed_dim=embed_dim, stride=patch_size, activation=activation)
+# 训练 10 个 epoch
+for epoch in range(10):  # <---- 自定义训练 epoch 数量
+    loss = train(model, data, labels)
+    print(f"Epoch {epoch+1}, Loss: {loss}")
 
-        # 位置编码层，使用可学习的位置编码
-        num_patches = (img_size // patch_size) ** 2
-        self.position_embedding = tf.keras.layers.Embedding(input_dim=num_patches, output_dim=embed_dim)
+# 测试过程
+def test(model, data):
+    model.eval()
+    with torch.no_grad():
+        out = model(data)
+        pred = out.argmax(dim=1)
+    return pred
 
-        # Transformer 编码器层
-        self.encoder_layers = [TransformerEncoderLayer(embed_dim, num_heads, ff_dim) for _ in range(num_layers)]
+# 假设进行测试
+predictions = test(model, data)
+print(predictions)
 
-        # 分类头
-        self.classifier = tf.keras.layers.Dense(num_classes)
-
-    def call(self, x):
-        # 确保输入是 float32 类型
-        x = tf.cast(x, tf.float32)
-
-        # 通过 PatchEmbed 层将输入图像转换为 patch 嵌入
-        x = self.patch_embed(x)
-
-        # 扁平化图像，准备传入 Transformer
-        x = tf.reshape(x, (x.shape[0], -1, x.shape[-1]))  # (batch_size, num_patches, embed_dim)
-
-        # 生成位置编码，并将其加到 patch 嵌入上
-        num_patches = x.shape[1]
-        position_encoding = self.position_embedding(tf.range(num_patches))  # (num_patches,)
-        position_encoding = tf.expand_dims(position_encoding, 0)  # 扩展到 batch_size 维度
-        x = x + position_encoding  # 位置编码与 patch 嵌入相加
-
-        # 经过每个 Transformer 编码器层
-        for encoder_layer in self.encoder_layers:
-            x = encoder_layer(x)
-
-        # 对输出进行池化（例如取均值池化）
-        # 可根据需求替换为更复杂的池化策略（例如最大池化或加权池化）
-        x = tf.reduce_mean(x, axis=1)  # (batch_size, embed_dim)
-
-        # 分类头输出
-        x = self.classifier(x)
-
-        return x
-
-
-# 创建模型实例
-model = VisionTransformer(img_size=224, patch_size=8, embed_dim=512, num_heads=8, num_layers=6, ff_dim=1024, num_classes=1000, activation=activations.swish)
-
-
+# 结果可视化
+plt.imshow(image)
+plt.title(f'Predicted Label: {predictions[0].item()}')  # <---- 显示预测标签
+plt.show()
