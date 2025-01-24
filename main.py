@@ -56,7 +56,7 @@ def build_adjacency_matrix(segments):
             adjacency_matrix[curr_segment, down_segment] = 1
 
     # 对邻接矩阵进行归一化
-    adjacency_matrix = normalize(adjacency_matrix, norm='l1', axis=1)
+    adjacency_matrix = normalize(adjacency_matrix, norm='l2', axis=1)
     return adjacency_matrix
 
 # 获取邻接矩阵
