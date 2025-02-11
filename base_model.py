@@ -1,14 +1,15 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from PIL import Image
 from torch import Tensor
 from torch_geometric.nn import GCNConv
-from torchvision import models
+from torchvision import models, transforms
 
 
 # ---------------------- CNN特征提取模块 ----------------------
 class MultiScaleFeatureExtractor(nn.Module):
-    """修正后的多尺度特征提取器"""
+    """多尺度特征提取器"""
     def __init__(self,
                  cnn_type: str = 'resnet50',
                  pretrained: bool = True,
@@ -42,7 +43,7 @@ class MultiScaleFeatureExtractor(nn.Module):
             nn.AdaptiveAvgPool2d(1),
             nn.Flatten(),
             nn.Linear(self._get_total_channels(cnn_type, layers_to_extract), output_dims),
-            nn.BatchNorm1d(output_dims),
+            nn.BatchNorm1d(output_dims, affine=True),  # 添加affine参数
             nn.ReLU()
         )
 
@@ -260,10 +261,47 @@ class FullModel(nn.Module):
         return logits
 
 
+class ImageGraphPipeline(nn.Module):
+    """端到端图像处理管道"""
+    def __init__(self,
+                 model: nn.Module,
+                 img_size: int = 224,
+                 mean: list = [0.485, 0.456, 0.406],
+                 std: list = [0.229, 0.224, 0.225]):
+        super().__init__()
+        self.model = model
+        self.preprocess = transforms.Compose([
+            transforms.Resize((img_size, img_size)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=mean, std=std)
+        ])
+
+    def forward(self, image_path: str) -> Tensor:
+        """处理单张图像时自动切换评估模式"""
+        # 确保使用评估模式
+        self.model.eval()
+
+        with torch.no_grad():
+            img = Image.open(image_path).convert('RGB')
+            img_tensor = self.preprocess(img).unsqueeze(0)  # [1, C, H, W]
+
+            # 临时禁用BatchNorm的验证
+            with torch.no_grad():
+                output = self.model(img_tensor)
+
+        return output[0]
+
+
 # ---------------------- 测试用例 ----------------------
 if __name__ == "__main__":
-    batch_size = 4
-    img = torch.randn(batch_size, 3, 224, 224)  # 输入符合[B, 3, H, W]
-    model = FullModel()
-    output = model(img)
-    print("模型输出维度:", output.shape)  # [4, 20]
+    # 初始化完整管道
+    pipeline = ImageGraphPipeline(FullModel())
+
+    # 单张图像处理示例
+    output = pipeline("images/image02.jpg")
+    print("单张图像预测结果:", output.shape)  # [20]
+
+    # 批量处理示例
+    batch_images = [torch.randn(3, 224, 224) for _ in range(4)]
+    batch_tensor = torch.stack(batch_images)  # [4, 3, 224, 224]
+    print("批量预测维度:", FullModel()(batch_tensor).shape)  # [4, 20]
