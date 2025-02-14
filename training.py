@@ -142,6 +142,14 @@ class Trainer:
         self.train_loader = train_loader
         self.val_loader = val_loader
         self.device = device
+        
+        # 添加混合精度训练
+        self.scaler = torch.cuda.amp.GradScaler(enabled=(device == "cuda"))
+        
+        # 多GPU支持
+        if torch.cuda.device_count() > 1:
+            self.model = nn.DataParallel(self.model)
+            logger.info(f"Using {torch.cuda.device_count()} GPUs!")
 
         # 多标签分类使用BCEWithLogitsLoss
         self.criterion = torch.nn.BCEWithLogitsLoss()
@@ -153,16 +161,19 @@ class Trainer:
         total_loss = 0.0
 
         for images, labels in self.train_loader:
-            images = images.to(self.device)
-            labels = labels.to(self.device)
+            images = images.to(self.device, non_blocking=True)  # 异步传输
+            labels = labels.to(self.device, non_blocking=True)
 
             self.optimizer.zero_grad()
 
-            outputs = self.model(images)
-            loss = self.criterion(outputs, labels)
+            # 混合精度训练
+            with torch.cuda.amp.autocast(enabled=(self.device == "cuda")):
+                outputs = self.model(images)
+                loss = self.criterion(outputs, labels)
 
-            loss.backward()
-            self.optimizer.step()
+            self.scaler.scale(loss).backward()
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
 
             total_loss += loss.item() * images.size(0)
 
@@ -203,6 +214,12 @@ class Trainer:
 
 # ---------------------- 数据增强配置 ----------------------
 def get_transforms(train: bool = True):
+    """增强的数据增强模块
+    
+    Args:
+        train: 是否为训练模式
+    """
+    # 基础变换
     base_transform = [
         transforms.Resize((224, 224)),
         transforms.ToTensor(),
@@ -211,10 +228,59 @@ def get_transforms(train: bool = True):
 
     if train:
         return transforms.Compose([
-            transforms.RandomHorizontalFlip(),
+            # 随机裁剪
+            transforms.RandomResizedCrop(
+                224,
+                scale=(0.8, 1.0),
+                ratio=(0.9, 1.1)
+            ),
+            
+            # 颜色增强
+            transforms.ColorJitter(
+                brightness=0.2,
+                contrast=0.2,
+                saturation=0.2,
+                hue=0.1
+            ),
+            
+            # 随机水平翻转
+            transforms.RandomHorizontalFlip(p=0.5),
+            
+            # 随机垂直翻转
+            transforms.RandomVerticalFlip(p=0.3),
+            
+            # 随机旋转
             transforms.RandomRotation(15),
+            
+            # 随机擦除
+            transforms.RandomErasing(
+                p=0.3,
+                scale=(0.02, 0.2),
+                ratio=(0.3, 3.3)
+            ),
+            
+            # 随机透视
+            transforms.RandomPerspective(
+                distortion_scale=0.3,
+                p=0.3
+            ),
+            
+            # 随机高斯模糊
+            transforms.GaussianBlur(
+                kernel_size=3,
+                sigma=(0.1, 2.0)
+            ),
+            
+            # 随机调整锐度
+            transforms.RandomAdjustSharpness(
+                sharpness_factor=2,
+                p=0.3
+            ),
+            
             *base_transform
         ])
+    
+    # 测试时只使用基础变换
     return transforms.Compose(base_transform)
 
 
@@ -242,13 +308,18 @@ def create_safe_loader(dataset: Dataset,
     elif shuffle is None:
         shuffle = True  # 默认行为
 
+    # 优化数据加载配置
+    num_workers = min(os.cpu_count(), 8)  # 自动设置合理的工作进程数
+    pin_memory = pin_memory and torch.cuda.is_available()  # 自动启用pin_memory
+    
     return DataLoader(
         dataset,
         batch_size=batch_size,
         shuffle=shuffle,
         sampler=sampler,
         num_workers=num_workers,
-        pin_memory=pin_memory,
+        pin_memory=pin_memory,  # 加速GPU数据传输
+        persistent_workers=True if num_workers > 0 else False,  # 保持工作进程
         collate_fn=collate_fn,
         worker_init_fn=lambda worker_id: np.random.seed(torch.initial_seed() % 2 ** 32),
         drop_last=True  # 避免最后批次尺寸不一致
@@ -489,4 +560,7 @@ if __name__ == "__main__":
     trainer.train(epochs=20)
 
     # 4. 保存模型
-    torch.save(model.state_dict(), "multilabel_model.pth")
+    if isinstance(model, nn.DataParallel):
+        torch.save(model.module.state_dict(), "multilabel_model.pth")
+    else:
+        torch.save(model.state_dict(), "multilabel_model.pth")
