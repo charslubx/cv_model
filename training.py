@@ -29,48 +29,36 @@ ImageFile.LOAD_TRUNCATED_IMAGES = True  # 允许加载截断的图像
 # ---------------------- 增强的数据验证类 ----------------------
 class DataValidator:
     @staticmethod
-    def validate_image(image_path: str) -> bool:
-        """执行多维度图像验证"""
+    def validate_image(img_path):
+        """验证图像文件"""
+        if not os.path.exists(img_path):
+            logger.warning(f"图像文件不存在: {img_path}")
+            return False
+        
         try:
-            # 1. 检查文件是否存在
-            if not os.path.exists(image_path):
-                logger.warning(f"Missing file: {image_path}")
-                return False
-
-            # 2. 检查文件格式
-            with Image.open(image_path) as img:
-                img.verify()  # 验证图像完整性
-
-                # 3. 检查图像模式
-                if img.mode != 'RGB':
-                    logger.warning(f"Invalid mode {img.mode} in {image_path}")
+            with Image.open(img_path) as img:
+                # 检查图像是否可以正常打开
+                img.verify()
+                # 重新打开图像以检查尺寸
+                img = Image.open(img_path)
+                if img.size[0] < 10 or img.size[1] < 10:
+                    logger.warning(f"图像尺寸过小: {img_path}, size={img.size}")
                     return False
-
-                # 4. 检查最小尺寸
-                if min(img.size) < 32:
-                    logger.warning(f"Image too small: {image_path}")
-                    return False
-
-            return True
-
+                return True
         except Exception as e:
-            logger.error(f"Corrupted image {image_path}: {str(e)}")
+            logger.warning(f"图像验证失败: {img_path}, 错误: {str(e)}")
             return False
 
     @staticmethod
-    def validate_labels(labels: pd.Series) -> bool:
-        """验证标签有效性"""
-        # 1. 检查是否存在至少一个正样本
-        if labels.sum() == 0:
-            logger.warning(f"No positive labels in sample")
+    def validate_labels(labels):
+        """验证标签数据"""
+        try:
+            # 确保所有值都是0或1
+            label_values = labels.values
+            return np.all(np.logical_or(label_values == 0, label_values == 1))
+        except Exception as e:
+            logger.warning(f"标签验证失败: {str(e)}")
             return False
-
-        # 2. 检查标签值范围
-        if not labels.isin([0, 1]).all():
-            logger.warning(f"Invalid label values in sample")
-            return False
-
-        return True
 
 
 # ---------------------- 改进的数据集类 ----------------------
@@ -82,13 +70,13 @@ class MultiLabelDataset(Dataset):
                  label_columns: list = None,
                  max_retry: int = 5):
         """
-        新增参数：
-        max_retry: 最大重试次数（防止无限循环）
+        初始化数据集
         """
         self.df = pd.read_csv(csv_path)
         self.image_dir = image_dir
         self.transform = transform
-        self.label_columns = label_columns or self.df.columns[1:]
+        # 如果未指定标签列，则假设除了image_path之外的所有列都是标签列
+        self.label_columns = label_columns or [col for col in self.df.columns if col != 'image_path']
         self.max_retry = max_retry
 
         # 数据清洗步骤
@@ -97,38 +85,121 @@ class MultiLabelDataset(Dataset):
     def _clean_data(self):
         """执行数据清洗"""
         original_size = len(self.df)
+        logger.info(f"原始数据样本数: {original_size}")
 
         # 1. 去除重复样本
         self.df = self.df.drop_duplicates(subset=['image_path'])
+        logger.info(f"去重后样本数: {len(self.df)}")
 
-        # 2. 去除无效标签
-        self.df = self.df[self.df[self.label_columns].sum(axis=1) > 0]
+        # 2. 确保标签列为数值类型并打印数据类型信息
+        logger.info("标签列数据类型转换前:")
+        logger.info(self.df[self.label_columns].dtypes)
+        
+        # 只对标签列进行数值转换
+        label_df = self.df[self.label_columns].copy()
+        for col in self.label_columns:
+            try:
+                label_df[col] = pd.to_numeric(label_df[col], errors='coerce')
+                invalid_count = label_df[col].isna().sum()
+                if invalid_count > 0:
+                    logger.warning(f"列 {col} 中有 {invalid_count} 个无效值被转换为 NaN")
+            except Exception as e:
+                logger.error(f"列 {col} 转换为数值类型时出错: {str(e)}")
+                problem_samples = self.df[pd.to_numeric(self.df[col], errors='coerce').isna()]
+                logger.error(f"问题数据样本:\n{problem_samples[col].head()}")
+                raise
 
-        # 3. 记录清洗结果
-        logger.info(f"Data cleaned: {original_size} -> {len(self.df)} samples")
+        # 更新原始DataFrame中的标签列
+        self.df[self.label_columns] = label_df
+
+        logger.info("标签列数据类型转换后:")
+        logger.info(self.df[self.label_columns].dtypes)
+        logger.info(f"数值转换后样本数: {len(self.df)}")
+
+        # 3. 去除包含 NaN 的行（只检查标签列）
+        before_dropna = len(self.df)
+        self.df = self.df.dropna(subset=self.label_columns)
+        logger.info(f"去除NaN后样本数: {len(self.df)} (删除了 {before_dropna - len(self.df)} 行)")
+
+        # 4. 去除无效标签（确保所有值都是 0 或 1）
+        before_valid = len(self.df)
+        valid_labels = (self.df[self.label_columns] == 0) | (self.df[self.label_columns] == 1)
+        self.df = self.df[valid_labels.all(axis=1)]
+        logger.info(f"去除非0/1值后样本数: {len(self.df)} (删除了 {before_valid - len(self.df)} 行)")
+
+        # 打印一些样本数据用于检查
+        if len(self.df) > 0:
+            logger.info("数据样本示例:")
+            logger.info(self.df[['image_path'] + self.label_columns].head())
+        
+        # 5. 去除没有正样本的行
+        before_positive = len(self.df)
+        row_sums = self.df[self.label_columns].sum(axis=1)
+        self.df = self.df[row_sums > 0]
+        logger.info(f"去除无正样本后样本数: {len(self.df)} (删除了 {before_positive - len(self.df)} 行)")
+
+        # 6. 记录清洗结果
+        cleaned_size = len(self.df)
+        logger.info(f"数据清洗最终结果: {original_size} -> {cleaned_size} 个样本")
+        
+        if cleaned_size == 0:
+            if before_positive > 0:
+                logger.error("最后一步前的数据示例:")
+                logger.error(self.df[['image_path'] + self.label_columns].head())
+                logger.error(f"行和统计: {row_sums.describe()}")
+            raise ValueError("清洗后没有剩余有效样本！请检查数据格式是否正确。")
 
     def __getitem__(self, idx):
-        """增加数据验证和自动重试机制"""
+        """获取数据集中的一个样本"""
         for _ in range(self.max_retry):
-            row = self.df.iloc[idx]
-            img_path = f"{self.image_dir}/{row['image_path']}"
+            try:
+                row = self.df.iloc[idx]
+                img_path = os.path.join(self.image_dir, row['image_path'])
 
-            # 执行数据验证
-            if not DataValidator.validate_image(img_path):
+                # 验证图像文件
+                if not DataValidator.validate_image(img_path):
+                    idx = (idx + 1) % len(self.df)
+                    continue
+
+                # 验证标签
+                labels = row[self.label_columns]
+                if not DataValidator.validate_labels(labels):
+                    idx = (idx + 1) % len(self.df)
+                    continue
+
+                # 加载并转换图像
+                image = Image.open(img_path).convert('RGB')
+                
+                # 应用数据转换
+                if self.transform is not None:
+                    image = self.transform(image)
+                else:
+                    # 默认转换
+                    transform = transforms.Compose([
+                        transforms.Resize((224, 224)),
+                        transforms.ToTensor(),
+                        transforms.Normalize(
+                            mean=[0.485, 0.456, 0.406],
+                            std=[0.229, 0.224, 0.225]
+                        )
+                    ])
+                    image = transform(image)
+
+                # 转换标签为张量
+                labels = torch.FloatTensor(labels.values.astype(float))
+                
+                return image, labels
+
+            except Exception as e:
+                logger.error(f"处理图像 {img_path} 时出错: {str(e)}")
                 idx = (idx + 1) % len(self.df)
                 continue
 
-            labels = torch.FloatTensor(row[self.label_columns].values.astype(float))
-            if not DataValidator.validate_labels(row[self.label_columns]):
-                idx = (idx + 1) % len(self.df)
-                continue
+        raise RuntimeError(f"在 {self.max_retry} 次尝试后未能获取有效样本")
 
-            # 通过验证后加载数据
-            image = Image.open(img_path).convert('RGB')
-            # ... 原有处理代码 ...
-            return image, labels
-
-        raise RuntimeError(f"Failed to get valid sample after {self.max_retry} attempts")
+    def __len__(self):
+        """返回数据集的总样本数"""
+        return len(self.df)
 
 
 # ---------------------- 训练模块 ----------------------
@@ -213,75 +284,29 @@ class Trainer:
 
 
 # ---------------------- 数据增强配置 ----------------------
-def get_transforms(train: bool = True):
-    """增强的数据增强模块
-    
-    Args:
-        train: 是否为训练模式
-    """
-    # 基础变换
-    base_transform = [
-        transforms.Resize((224, 224)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    ]
-
+def get_transforms(train=True):
+    """获取数据转换"""
     if train:
         return transforms.Compose([
-            # 随机裁剪
-            transforms.RandomResizedCrop(
-                224,
-                scale=(0.8, 1.0),
-                ratio=(0.9, 1.1)
-            ),
-            
-            # 颜色增强
-            transforms.ColorJitter(
-                brightness=0.2,
-                contrast=0.2,
-                saturation=0.2,
-                hue=0.1
-            ),
-            
-            # 随机水平翻转
-            transforms.RandomHorizontalFlip(p=0.5),
-            
-            # 随机垂直翻转
-            transforms.RandomVerticalFlip(p=0.3),
-            
-            # 随机旋转
-            transforms.RandomRotation(15),
-            
-            # 随机擦除
-            transforms.RandomErasing(
-                p=0.3,
-                scale=(0.02, 0.2),
-                ratio=(0.3, 3.3)
-            ),
-            
-            # 随机透视
-            transforms.RandomPerspective(
-                distortion_scale=0.3,
-                p=0.3
-            ),
-            
-            # 随机高斯模糊
-            transforms.GaussianBlur(
-                kernel_size=3,
-                sigma=(0.1, 2.0)
-            ),
-            
-            # 随机调整锐度
-            transforms.RandomAdjustSharpness(
-                sharpness_factor=2,
-                p=0.3
-            ),
-            
-            *base_transform
+            transforms.Resize((224, 224)),
+            transforms.RandomHorizontalFlip(),
+            transforms.RandomRotation(10),
+            transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
+            transforms.ToTensor(),
+            transforms.Normalize(
+                mean=[0.485, 0.456, 0.406],
+                std=[0.229, 0.224, 0.225]
+            )
         ])
-    
-    # 测试时只使用基础变换
-    return transforms.Compose(base_transform)
+    else:
+        return transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.ToTensor(),
+            transforms.Normalize(
+                mean=[0.485, 0.456, 0.406],
+                std=[0.229, 0.224, 0.225]
+            )
+        ])
 
 
 # ---------------------- 改进的DataLoader配置 ----------------------
