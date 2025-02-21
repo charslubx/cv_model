@@ -5,6 +5,7 @@ from PIL import Image
 from torch import Tensor
 from torch_geometric.nn import GCNConv
 from torchvision import models, transforms
+import pandas as pd
 
 
 # ---------------------- CNN特征提取模块 ----------------------
@@ -228,20 +229,30 @@ class FullModel(nn.Module):
     """端到端模型（修正输入处理）"""
     def __init__(self,
                  cnn_feat_dim: int = 2048,
-                 gat_dims: list = [512, 256],
-                 num_classes: int = 20,
+                 gat_dims: list = [1024, 512],  # 增加维度以处理更多属性
+                 num_classes: int = None,  # 改为可选参数
                  gat_heads: int = 8
                 ):
         super().__init__()
-        self.cnn = MultiScaleFeatureExtractor(output_dims=cnn_feat_dim)
+        if num_classes is None:
+            # 如果未指定，则从训练数据中获取属性数量
+            train_df = pd.read_csv("data/train_labels.csv")
+            num_classes = len(train_df.columns) - 1
+            
+        self.cnn = MultiScaleFeatureExtractor(
+            output_dims=cnn_feat_dim,
+            layers_to_extract=['layer2', 'layer3', 'layer4']  # 使用更多层以提取更丰富的特征
+        )
         self.gat = StackedGAT(
             in_features=cnn_feat_dim,
             hidden_dims=gat_dims,
-            heads=gat_heads
+            heads=gat_heads,
+            dropout=0.3  # 增加dropout以防止过拟合
         )
         self.gcn = GCNClassifier(
             in_features=gat_dims[-1],
-            num_classes=num_classes
+            num_classes=num_classes,
+            hidden_dims=[768, 384]  # 增加隐藏层维度
         )
 
     def forward(self, x_img: Tensor) -> Tensor:

@@ -2,12 +2,14 @@ import torch
 import logging
 from training import MultiLabelDataset, get_transforms, create_safe_loader, Trainer
 from base_model import FullModel
+import pandas as pd
+import kagglehub
 
 # 设置日志
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def train_model(train_csv, image_dir, epochs=10):
+def train_model(train_csv, image_dir, epochs=10, num_classes=None):
     """训练模型"""
     try:
         # 创建数据转换
@@ -53,7 +55,7 @@ def train_model(train_csv, image_dir, epochs=10):
         device = "cuda" if torch.cuda.is_available() else "cpu"
         logger.info(f"使用设备: {device}")
         
-        model = FullModel(num_classes=len(train_dataset.label_columns))
+        model = FullModel(num_classes=num_classes)
         trainer = Trainer(model, train_loader, val_loader, device)
         
         # 训练模型
@@ -73,13 +75,22 @@ def train_model(train_csv, image_dir, epochs=10):
         raise
 
 if __name__ == "__main__":
-    # 准备CIFAR-10数据
-    import prepare_cifar_data
-    prepare_cifar_data.prepare_cifar10_dataset()
+    # 准备DeepFashion数据
+    import prepare_deepfashion_data
+    
+    # 设置数据集路径
+    dataset_root = "/root/.cache/kagglehub/datasets/vishalbsadanand/deepfashion-1/versions/1/datasets"  # 根据实际路径调整
+    
+    # 准备数据集并获取属性数量
+    num_attributes = prepare_deepfashion_data.prepare_deepfashion_dataset(
+        dataset_root=dataset_root,
+        min_samples_per_attr=100
+    )
     
     # 训练模型
-    train_model(
-        train_csv="data/train_labels.csv",
-        image_dir="data/images",
-        epochs=50  # 增加到50轮
-    )
+    # train_model(
+    #     train_csv="data/train_labels.csv",
+    #     image_dir="data/images",
+    #     epochs=50,
+    #     num_classes=num_attributes
+    # )
