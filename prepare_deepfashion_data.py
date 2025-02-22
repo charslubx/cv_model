@@ -87,7 +87,7 @@ def prepare_deepfashion_dataset(
         logger.info("处理训练、验证和测试集图片与标签...")
         splits_config = {
             'train': {'img_dir': train_img_dir, 'prefix': 'df_train_'},
-            'val': {'img_dir': os.path.join(dataset_root, "densepose"), 'prefix': 'df_val_'},
+            'val': {'img_dir': train_img_dir, 'prefix': 'df_val_'},
             'test': {'img_dir': test_img_dir, 'prefix': 'df_test_'}
         }
         

@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import copy
 
 import torch
 import optuna
@@ -15,8 +16,9 @@ from torchvision import transforms
 from PIL import Image, ImageFile
 from functools import partial
 from optuna.trial import Trial
+from tqdm import tqdm
 
-from base_model import FullModel
+from base_model import FullModel, FocalLoss
 
 # 初始化日志
 logging.basicConfig(level=logging.INFO)
@@ -34,14 +36,15 @@ class DataValidator:
         if not os.path.exists(img_path):
             logger.warning(f"图像文件不存在: {img_path}")
             return False
-        
+
         try:
             with Image.open(img_path) as img:
                 # 检查图像是否可以正常打开
                 img.verify()
                 # 重新打开图像以检查尺寸
                 img = Image.open(img_path)
-                if img.size[0] < 10 or img.size[1] < 10:
+                width, height = img.size  # 使用size而不是shape
+                if width < 10 or height < 10:
                     logger.warning(f"图像尺寸过小: {img_path}, size={img.size}")
                     return False
                 return True
@@ -75,79 +78,35 @@ class MultiLabelDataset(Dataset):
         self.df = pd.read_csv(csv_path)
         self.image_dir = image_dir
         self.transform = transform
-        # 如果未指定标签列，则假设除了image_path之外的所有列都是标签列
         self.label_columns = label_columns or [col for col in self.df.columns if col != 'image_path']
         self.max_retry = max_retry
+
+        # 预加载所有图像尺寸信息
+        self.image_sizes = {}
+        self._preload_image_sizes()
 
         # 数据清洗步骤
         self._clean_data()
 
-    def _clean_data(self):
-        """执行数据清洗"""
-        original_size = len(self.df)
-        logger.info(f"原始数据样本数: {original_size}")
-
-        # 1. 去除重复样本
-        self.df = self.df.drop_duplicates(subset=['image_path'])
-        logger.info(f"去重后样本数: {len(self.df)}")
-
-        # 2. 确保标签列为数值类型并打印数据类型信息
-        logger.info("标签列数据类型转换前:")
-        logger.info(self.df[self.label_columns].dtypes)
-        
-        # 只对标签列进行数值转换
-        label_df = self.df[self.label_columns].copy()
-        for col in self.label_columns:
+    def _preload_image_sizes(self):
+        """预加载所有图像的尺寸信息"""
+        logger.info("预加载图像尺寸信息...")
+        valid_images = []
+        for idx, row in tqdm(self.df.iterrows(), total=len(self.df), desc="加载图像信息"):
+            img_path = os.path.join(self.image_dir, row['image_path'])
             try:
-                label_df[col] = pd.to_numeric(label_df[col], errors='coerce')
-                invalid_count = label_df[col].isna().sum()
-                if invalid_count > 0:
-                    logger.warning(f"列 {col} 中有 {invalid_count} 个无效值被转换为 NaN")
+                with Image.open(img_path) as img:
+                    width, height = img.size
+                    if width >= 10 and height >= 10:  # 添加基本的尺寸验证
+                        self.image_sizes[img_path] = (width, height)
+                        valid_images.append(idx)
             except Exception as e:
-                logger.error(f"列 {col} 转换为数值类型时出错: {str(e)}")
-                problem_samples = self.df[pd.to_numeric(self.df[col], errors='coerce').isna()]
-                logger.error(f"问题数据样本:\n{problem_samples[col].head()}")
-                raise
+                logger.warning(f"无法加载图像 {img_path}: {str(e)}")
+                continue
 
-        # 更新原始DataFrame中的标签列
-        self.df[self.label_columns] = label_df
-
-        logger.info("标签列数据类型转换后:")
-        logger.info(self.df[self.label_columns].dtypes)
-        logger.info(f"数值转换后样本数: {len(self.df)}")
-
-        # 3. 去除包含 NaN 的行（只检查标签列）
-        before_dropna = len(self.df)
-        self.df = self.df.dropna(subset=self.label_columns)
-        logger.info(f"去除NaN后样本数: {len(self.df)} (删除了 {before_dropna - len(self.df)} 行)")
-
-        # 4. 去除无效标签（确保所有值都是 0 或 1）
-        before_valid = len(self.df)
-        valid_labels = (self.df[self.label_columns] == 0) | (self.df[self.label_columns] == 1)
-        self.df = self.df[valid_labels.all(axis=1)]
-        logger.info(f"去除非0/1值后样本数: {len(self.df)} (删除了 {before_valid - len(self.df)} 行)")
-
-        # 打印一些样本数据用于检查
-        if len(self.df) > 0:
-            logger.info("数据样本示例:")
-            logger.info(self.df[['image_path'] + self.label_columns].head())
-        
-        # 5. 去除没有正样本的行
-        before_positive = len(self.df)
-        row_sums = self.df[self.label_columns].sum(axis=1)
-        self.df = self.df[row_sums > 0]
-        logger.info(f"去除无正样本后样本数: {len(self.df)} (删除了 {before_positive - len(self.df)} 行)")
-
-        # 6. 记录清洗结果
-        cleaned_size = len(self.df)
-        logger.info(f"数据清洗最终结果: {original_size} -> {cleaned_size} 个样本")
-        
-        if cleaned_size == 0:
-            if before_positive > 0:
-                logger.error("最后一步前的数据示例:")
-                logger.error(self.df[['image_path'] + self.label_columns].head())
-                logger.error(f"行和统计: {row_sums.describe()}")
-            raise ValueError("清洗后没有剩余有效样本！请检查数据格式是否正确。")
+        # 更新数据框，只保留有效图像
+        self.df = self.df.loc[valid_images].reset_index(drop=True)
+        logger.info(f"成功加载 {len(self.image_sizes)} 个有效图像")
 
     def __getitem__(self, idx):
         """获取数据集中的一个样本"""
@@ -156,46 +115,103 @@ class MultiLabelDataset(Dataset):
                 row = self.df.iloc[idx]
                 img_path = os.path.join(self.image_dir, row['image_path'])
 
-                # 验证图像文件
-                if not DataValidator.validate_image(img_path):
+                # 检查图像是否已预加载尺寸信息
+                if img_path not in self.image_sizes:
                     idx = (idx + 1) % len(self.df)
                     continue
 
-                # 验证标签
-                labels = row[self.label_columns]
-                if not DataValidator.validate_labels(labels):
+                # 加载图像
+                try:
+                    with Image.open(img_path) as img:
+                        img = img.convert('RGB')
+                        width, height = img.size  # 使用PIL的size属性
+
+                        # 原始图像尺寸验证
+                        if width < 10 or height < 10:
+                            logger.warning(f"图像尺寸过小: {img_path}, size={img.size}")
+                            idx = (idx + 1) % len(self.df)
+                            continue
+
+                        # 应用数据转换
+                        if self.transform is not None:
+                            try:
+                                img_tensor = self.transform(img)  # 转换后得到张量
+                                # 现在可以安全使用shape属性（张量维度为[C, H, W]）
+                                if img_tensor.shape[1] < 10 or img_tensor.shape[2] < 10:
+                                    raise ValueError(f"转换后尺寸过小: {img_tensor.shape}")
+                                # print(img_tensor.shape)   # 应该类似torch.Size([3, 224, 224])
+                            except Exception as e:
+                                logger.warning(f"转换失败 {img_path}: {str(e)}")
+                                idx = (idx + 1) % len(self.df)
+                                continue
+                        else:
+                            # 默认转换使用size判断
+                            transform = transforms.Compose([
+                                transforms.Resize((224, 224)),
+                                transforms.ToTensor(),
+                                transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+                            ])
+                            img_tensor = transform(img)
+
+                    # 转换标签为张量
+                    labels = torch.FloatTensor(row[self.label_columns].values.astype(float))
+
+                    return img_tensor, labels
+
+                except Exception as e:
+                    logger.warning(f"处理图像 {img_path} 时出错: {str(e)}")
                     idx = (idx + 1) % len(self.df)
                     continue
-
-                # 加载并转换图像
-                image = Image.open(img_path).convert('RGB')
-                
-                # 应用数据转换
-                if self.transform is not None:
-                    image = self.transform(image)
-                else:
-                    # 默认转换
-                    transform = transforms.Compose([
-                        transforms.Resize((224, 224)),
-                        transforms.ToTensor(),
-                        transforms.Normalize(
-                            mean=[0.485, 0.456, 0.406],
-                            std=[0.229, 0.224, 0.225]
-                        )
-                    ])
-                    image = transform(image)
-
-                # 转换标签为张量
-                labels = torch.FloatTensor(labels.values.astype(float))
-                
-                return image, labels
 
             except Exception as e:
-                logger.error(f"处理图像 {img_path} 时出错: {str(e)}")
+                logger.warning(f"处理样本时出错: {str(e)}")
                 idx = (idx + 1) % len(self.df)
                 continue
 
         raise RuntimeError(f"在 {self.max_retry} 次尝试后未能获取有效样本")
+
+    def _clean_data(self):
+        """执行数据清洗"""
+        original_size = len(self.df)
+        logger.info(f"原始数据样本数: {original_size}")
+
+        # 1. 只保留已成功预加载尺寸信息的图像
+        valid_images = [idx for idx, row in self.df.iterrows()
+                        if os.path.join(self.image_dir, row['image_path']) in self.image_sizes]
+        self.df = self.df.loc[valid_images]
+        logger.info(f"有效图像数: {len(self.df)}")
+
+        # 2. 去除重复样本
+        self.df = self.df.drop_duplicates(subset=['image_path'])
+        logger.info(f"去重后样本数: {len(self.df)}")
+
+        # 3. 确保标签列为数值类型
+        for col in self.label_columns:
+            self.df[col] = pd.to_numeric(self.df[col], errors='coerce')
+
+        # 4. 去除包含NaN的行
+        self.df = self.df.dropna(subset=self.label_columns)
+        logger.info(f"去除NaN后样本数: {len(self.df)}")
+
+        # 5. 确保所有标签都是0或1
+        valid_labels = (self.df[self.label_columns] == 0) | (self.df[self.label_columns] == 1)
+        self.df = self.df[valid_labels.all(axis=1)]
+        logger.info(f"标签验证后样本数: {len(self.df)}")
+
+        # 6. 确保每个样本至少有一个正标签
+        has_positive = (self.df[self.label_columns].sum(axis=1) > 0)
+        self.df = self.df[has_positive]
+        logger.info(f"最终有效样本数: {len(self.df)}")
+
+        if len(self.df) == 0:
+            raise ValueError("清洗后没有剩余有效样本！")
+
+        # 重置索引
+        self.df = self.df.reset_index(drop=True)
+
+        # 打印一些样本数据用于检查
+        logger.info("\n数据样本示例:")
+        logger.info(self.df[['image_path'] + self.label_columns].head())
 
     def __len__(self):
         """返回数据集的总样本数"""
@@ -208,50 +224,102 @@ class Trainer:
                  model: nn.Module,
                  train_loader: DataLoader,
                  val_loader: DataLoader,
-                 device: str = "cuda" if torch.cuda.is_available() else "cpu"):
+                 device: str = "cuda" if torch.cuda.is_available() else "cpu",
+                 learning_rate: float = 3e-4):
         self.model = model.to(device)
         self.train_loader = train_loader
         self.val_loader = val_loader
         self.device = device
-        
-        # 添加混合精度训练
-        self.scaler = torch.cuda.amp.GradScaler(enabled=(device == "cuda"))
-        
+
+        # 调整优化器适应更大GAT
+        self.optimizer = torch.optim.AdamW(
+            model.parameters(),
+            lr=learning_rate,
+            weight_decay=0.15  # 更强的权重衰减
+        )
+
+        # 修改为OneCycleLR调度器
+        self.scheduler = torch.optim.lr_scheduler.OneCycleLR(
+            self.optimizer,
+            max_lr=learning_rate,
+            epochs=50,  # 总训练轮数
+            steps_per_epoch=len(train_loader),
+            pct_start=0.3,  # 预热阶段占比
+            div_factor=25.0,  # 初始学习率 = max_lr/25
+            final_div_factor=1e4  # 最终学习率 = max_lr/10000
+        )
+
+        # 3. 添加指数移动平均
+        self.ema = torch.optim.swa_utils.AveragedModel(model)
+        self.ema_start = 20  # 从第20轮开始使用EMA
+
+        # 4. 调整FocalLoss参数
+        self.criterion = FocalLoss(gamma=4.0, alpha=0.5)
+
+        # 5. 添加梯度缩放器
+        self.scaler = torch.cuda.amp.GradScaler()
+
+        # 6. 调整早停参数
+        self.patience = 15  # 增加耐心值
+        self.best_val_acc = 0
+        self.patience_counter = 0
+
+        # 添加当前epoch计数器
+        self.current_epoch = 0  # 新增初始化
+
         # 多GPU支持
         if torch.cuda.device_count() > 1:
             self.model = nn.DataParallel(self.model)
             logger.info(f"Using {torch.cuda.device_count()} GPUs!")
 
-        # 多标签分类使用BCEWithLogitsLoss
-        self.criterion = torch.nn.BCEWithLogitsLoss()
-        self.optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-        self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=5, gamma=0.1)
-
     def train_epoch(self):
         self.model.train()
         total_loss = 0.0
 
-        for images, labels in self.train_loader:
-            images = images.to(self.device, non_blocking=True)  # 异步传输
+        for images, labels in tqdm(self.train_loader, desc='Training'):
+            images = images.to(self.device, non_blocking=True)
             labels = labels.to(self.device, non_blocking=True)
+
+            # 1. 添加标签平滑
+            labels = labels * 0.9 + 0.05
 
             self.optimizer.zero_grad()
 
-            # 混合精度训练
-            with torch.cuda.amp.autocast(enabled=(self.device == "cuda")):
+            with torch.amp.autocast('cuda', enabled=(self.device == "cuda")):
                 outputs = self.model(images)
                 loss = self.criterion(outputs, labels)
 
             self.scaler.scale(loss).backward()
+
+            # 2. 梯度裁剪
+            self.scaler.unscale_(self.optimizer)
+            torch.nn.utils.clip_grad_norm_(
+                self.model.gat.parameters(),  # 仅裁剪GAT部分
+                max_norm=1.0
+            )
+
             self.scaler.step(self.optimizer)
             self.scaler.update()
 
             total_loss += loss.item() * images.size(0)
 
+            # 每个batch后更新学习率
+            self.scheduler.step()  # OneCycleLR在每个batch后调用
+
+        # 更新EMA模型
+        if self.current_epoch >= self.ema_start:
+            self.ema.update_parameters(self.model)
+
         return total_loss / len(self.train_loader.dataset)
 
     def validate(self):
-        self.model.eval()
+        # 使用EMA模型进行验证
+        if self.current_epoch >= self.ema_start:
+            eval_model = self.ema.module
+        else:
+            eval_model = self.model
+
+        eval_model.eval()
         total_loss = 0.0
         correct = 0
         total = 0
@@ -261,51 +329,71 @@ class Trainer:
                 images = images.to(self.device)
                 labels = labels.to(self.device)
 
-                outputs = self.model(images)
+                outputs = eval_model(images)
                 loss = self.criterion(outputs, labels)
 
+                preds = (outputs > 0.5).float()
+                correct += (preds == labels).float().sum().item()
+                total += labels.numel()
+
                 total_loss += loss.item() * images.size(0)
-                # 计算准确率（阈值0.5）
-                preds = (torch.sigmoid(outputs) > 0.5).float()
-                correct += (preds == labels).all(dim=1).sum().item()
-                total += images.size(0)
 
         return total_loss / len(self.val_loader.dataset), correct / total
 
-    def train(self, epochs: int = 10):
+    def train(self, epochs: int = 50):
+        # 更新scheduler的epochs参数
+        self.scheduler.total_steps = epochs * len(self.train_loader)
+
         for epoch in range(epochs):
+            self.current_epoch = epoch + 1  # 更新当前epoch计数（从1开始）
             train_loss = self.train_epoch()
             val_loss, val_acc = self.validate()
-            self.scheduler.step()
 
             print(f"Epoch {epoch + 1}/{epochs}")
-            print(
-                f"Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.4f}")
+            print(f"Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.4f}")
+
+            # 添加早停机制
+            if val_acc > self.best_val_acc:
+                self.best_val_acc = val_acc
+                self.patience_counter = 0
+            else:
+                self.patience_counter += 1
+
+            if self.patience_counter >= self.patience:
+                print(f"Early stopping at epoch {epoch + 1}")
+                break
 
 
-# ---------------------- 数据增强配置 ----------------------
+# ---------------------- 改进的数据增强配置 ----------------------
 def get_transforms(train=True):
-    """获取数据转换"""
+    """获取增强的数据转换"""
+    base_transform = [
+        # 所有PIL图像操作在前
+        transforms.RandomResizedCrop(224, scale=(0.8, 1.0)),
+        transforms.RandomHorizontalFlip(),
+        transforms.RandomVerticalFlip(),
+        transforms.RandomRotation(15),
+        transforms.ColorJitter(
+            brightness=0.3,
+            contrast=0.3,
+            saturation=0.3,
+            hue=0.1
+        )
+    ]
+
     if train:
         return transforms.Compose([
-            transforms.Resize((224, 224)),
-            transforms.RandomHorizontalFlip(),
-            transforms.RandomRotation(10),
-            transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
-            transforms.ToTensor(),
-            transforms.Normalize(
-                mean=[0.485, 0.456, 0.406],
-                std=[0.229, 0.224, 0.225]
-            )
+            *base_transform,
+            # 张量操作在后
+            transforms.ToTensor(),  # 转换PIL图像为张量
+            transforms.RandomErasing(p=0.2),  # 需要张量输入
+            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
         ])
     else:
         return transforms.Compose([
             transforms.Resize((224, 224)),
-            transforms.ToTensor(),
-            transforms.Normalize(
-                mean=[0.485, 0.456, 0.406],
-                std=[0.229, 0.224, 0.225]
-            )
+            transforms.ToTensor(),  # 先转换为张量
+            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
         ])
 
 
@@ -336,7 +424,7 @@ def create_safe_loader(dataset: Dataset,
     # 优化数据加载配置
     num_workers = min(os.cpu_count(), 8)  # 自动设置合理的工作进程数
     pin_memory = pin_memory and torch.cuda.is_available()  # 自动启用pin_memory
-    
+
     return DataLoader(
         dataset,
         batch_size=batch_size,
@@ -351,25 +439,34 @@ def create_safe_loader(dataset: Dataset,
     )
 
 
+# ---------------------- 改进的K折交叉验证 ----------------------
 class KFoldTrainer:
-    """K折交叉验证训练器"""
+    """增强的K折交叉验证训练器"""
 
     def __init__(self,
                  dataset: Dataset,
                  num_folds: int = 5,
                  batch_size: int = 32,
-                 epochs_per_fold: int = 10):
+                 epochs_per_fold: int = 40,
+                 save_dir: str = 'checkpoints'):
         self.dataset = dataset
         self.num_folds = num_folds
         self.batch_size = batch_size
         self.epochs_per_fold = epochs_per_fold
-        self.kfold = KFold(n_splits=num_folds, shuffle=True)
+        self.save_dir = save_dir
+        self.kfold = KFold(n_splits=num_folds, shuffle=True, random_state=42)
+
+        # 确保保存目录存在
+        os.makedirs(save_dir, exist_ok=True)
 
         # 存储各折结果
         self.fold_results = []
+        self.best_models = []
 
     def run(self):
         """执行交叉验证"""
+        overall_best_acc = 0
+
         for fold, (train_idx, val_idx) in enumerate(self.kfold.split(self.dataset)):
             logger.info(f"\n{'=' * 30} Fold {fold + 1}/{self.num_folds} {'=' * 30}")
 
@@ -377,12 +474,12 @@ class KFoldTrainer:
             train_sampler = SubsetRandomSampler(train_idx)
             val_sampler = SubsetRandomSampler(val_idx)
 
-            # 创建安全的数据加载器（显式设置shuffle=False）
+            # 创建数据加载器
             train_loader = create_safe_loader(
                 self.dataset,
                 batch_size=self.batch_size,
                 sampler=train_sampler,
-                shuffle=False  # 采样器已处理顺序
+                shuffle=False
             )
             val_loader = create_safe_loader(
                 self.dataset,
@@ -391,8 +488,8 @@ class KFoldTrainer:
                 shuffle=False
             )
 
-            # 初始化全新模型
-            model = FullModel(num_classes=20)
+            # 初始化新模型
+            model = FullModel()
             trainer = Trainer(model, train_loader, val_loader)
 
             # 训练当前折
@@ -401,61 +498,131 @@ class KFoldTrainer:
                 'val_loss': [],
                 'val_acc': []
             }
+
+            best_fold_acc = 0
+            best_fold_model = None
+
             for epoch in range(self.epochs_per_fold):
                 train_loss = trainer.train_epoch()
                 val_loss, val_acc = trainer.validate()
-                trainer.scheduler.step()
 
                 fold_result['train_loss'].append(train_loss)
                 fold_result['val_loss'].append(val_loss)
                 fold_result['val_acc'].append(val_acc)
 
+                # 保存最佳模型
+                if val_acc > best_fold_acc:
+                    best_fold_acc = val_acc
+                    best_fold_model = copy.deepcopy(model.state_dict())
+
+                    # 如果是总体最佳，则额外保存
+                    if val_acc > overall_best_acc:
+                        overall_best_acc = val_acc
+                        torch.save(
+                            best_fold_model,
+                            os.path.join(self.save_dir, f'best_model_overall.pth')
+                        )
+
                 logger.info(
                     f"Fold {fold + 1} Epoch {epoch + 1}/{self.epochs_per_fold} | "
-                    f"Train Loss: {train_loss:.4f} | Val Acc: {val_acc:.4f}"
+                    f"Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | "
+                    f"Val Acc: {val_acc:.4f} | Best Acc: {best_fold_acc:.4f}"
                 )
 
+                # 早停检查
+                if trainer.patience_counter >= trainer.patience:
+                    logger.info(f"Early stopping at epoch {epoch + 1}")
+                    break
+
+            # 保存当前折的最佳模型
+            torch.save(
+                best_fold_model,
+                os.path.join(self.save_dir, f'best_model_fold_{fold + 1}.pth')
+            )
+
             self.fold_results.append(fold_result)
+            self.best_models.append(best_fold_model)
+
+            # 清理GPU内存
+            del model, trainer
+            torch.cuda.empty_cache()
 
         self._analyze_results()
 
     def _analyze_results(self):
         """分析交叉验证结果"""
-        best_acc = max([max(fold['val_acc']) for fold in self.fold_results])
-        avg_acc = sum([fold['val_acc'][-1] for fold in self.fold_results]) / self.num_folds
+        # 计算各折最佳性能
+        best_accs = [max(fold['val_acc']) for fold in self.fold_results]
+        mean_best_acc = np.mean(best_accs)
+        std_best_acc = np.std(best_accs)
+
+        # 计算最终轮次的平均性能
+        final_accs = [fold['val_acc'][-1] for fold in self.fold_results]
+        mean_final_acc = np.mean(final_accs)
+        std_final_acc = np.std(final_accs)
 
         logger.info("\n=== Cross Validation Summary ===")
-        logger.info(f"Best Val Acc Across Folds: {best_acc:.4f}")
-        logger.info(f"Average Final Val Acc: {avg_acc:.4f}")
+        logger.info(f"Best Accuracy per Fold: {best_accs}")
+        logger.info(f"Mean Best Accuracy: {mean_best_acc:.4f} ± {std_best_acc:.4f}")
+        logger.info(f"Mean Final Accuracy: {mean_final_acc:.4f} ± {std_final_acc:.4f}")
 
         # 可视化训练曲线
         self._plot_learning_curves()
 
     def _plot_learning_curves(self):
-        """绘制学习曲线"""
+        """绘制详细的学习曲线"""
+        plt.figure(figsize=(15, 5))
 
-        plt.figure(figsize=(12, 5))
-
-        # 训练损失
-        plt.subplot(1, 2, 1)
+        # 1. 训练损失
+        plt.subplot(1, 3, 1)
         for i, fold in enumerate(self.fold_results):
             plt.plot(fold['train_loss'], label=f'Fold {i + 1}')
         plt.title('Training Loss')
         plt.xlabel('Epoch')
         plt.ylabel('Loss')
+        plt.legend()
 
-        # 验证准确率
-        plt.subplot(1, 2, 2)
+        # 2. 验证损失
+        plt.subplot(1, 3, 2)
+        for i, fold in enumerate(self.fold_results):
+            plt.plot(fold['val_loss'], label=f'Fold {i + 1}')
+        plt.title('Validation Loss')
+        plt.xlabel('Epoch')
+        plt.ylabel('Loss')
+        plt.legend()
+
+        # 3. 验证准确率
+        plt.subplot(1, 3, 3)
         for i, fold in enumerate(self.fold_results):
             plt.plot(fold['val_acc'], label=f'Fold {i + 1}')
         plt.title('Validation Accuracy')
         plt.xlabel('Epoch')
         plt.ylabel('Accuracy')
-
         plt.legend()
+
         plt.tight_layout()
-        plt.savefig('cross_val_results.png')
+        plt.savefig('cross_validation_results.png')
         plt.close()
+
+    def get_ensemble_model(self):
+        """返回集成模型"""
+        return ModelEnsemble([
+            FullModel().load_state_dict(state_dict)
+            for state_dict in self.best_models
+        ])
+
+
+class ModelEnsemble(nn.Module):
+    """模型集成类"""
+
+    def __init__(self, models):
+        super().__init__()
+        self.models = nn.ModuleList(models)
+
+    def forward(self, x):
+        # 对所有模型的预测取平均
+        outputs = [model(x) for model in self.models]
+        return torch.stack(outputs).mean(dim=0)
 
 
 class HyperParameterOptimizer:
@@ -589,3 +756,17 @@ if __name__ == "__main__":
         torch.save(model.module.state_dict(), "multilabel_model.pth")
     else:
         torch.save(model.state_dict(), "multilabel_model.pth")
+
+    # 初始化交叉验证训练器
+    kfold_trainer = KFoldTrainer(
+        dataset=train_dataset,
+        num_folds=5,
+        batch_size=32,
+        epochs_per_fold=40
+    )
+
+    # 执行交叉验证
+    kfold_trainer.run()
+
+    # 获取集成模型
+    ensemble_model = kfold_trainer.get_ensemble_model()
