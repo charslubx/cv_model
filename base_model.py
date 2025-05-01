@@ -6,88 +6,185 @@ from torch import Tensor
 from torch_geometric.nn import GCNConv
 from torchvision import models, transforms
 import pandas as pd
+import os
 
+# 定义数据集路径
+DEEPFASHION_ROOT = "deepfashion"
+DATA_DIR = "data/deepfashion_merged"
+ATTR_STATS_FILE = os.path.join(DATA_DIR, "attribute_stats.csv")
 
-# ---------------------- CNN特征提取模块 ----------------------
+class LandmarkBranch(nn.Module):
+    """服装关键点检测分支"""
+    def __init__(self, in_channels, num_landmarks=8):
+        super().__init__()
+        self.num_landmarks = num_landmarks
+        
+        # 关键点检测卷积层
+        self.conv1 = nn.Conv2d(in_channels, 256, 3, padding=1)
+        self.conv2 = nn.Conv2d(256, 256, 3, padding=1)
+        self.conv3 = nn.Conv2d(256, num_landmarks * 3, 1)  # *3: x, y, visibility
+        
+        self.bn1 = nn.BatchNorm2d(256)
+        self.bn2 = nn.BatchNorm2d(256)
+        
+    def forward(self, x):
+        x = F.relu(self.bn1(self.conv1(x)))
+        x = F.relu(self.bn2(self.conv2(x)))
+        x = self.conv3(x)
+        
+        # 分离坐标和可见性预测
+        B, C, H, W = x.shape
+        x = x.view(B, self.num_landmarks, 3, H, W)
+        
+        # 对坐标进行softmax，分别在H和W维度上进行
+        coords_x = F.softmax(x[:, :, 0], dim=-1)  # 在W维度上的softmax
+        coords_y = F.softmax(x[:, :, 1], dim=-2)  # 在H维度上的softmax
+        coords = torch.stack([coords_x, coords_y], dim=2)
+        
+        vis = torch.sigmoid(x[:, :, 2].mean(dim=[-2, -1]))  # 可见性预测
+        
+        return coords, vis
+
+class SegmentationBranch(nn.Module):
+    """服装分割分支"""
+    def __init__(self, in_channels, num_classes=1):
+        super().__init__()
+        
+        self.conv1 = nn.Conv2d(in_channels, 256, 3, padding=1)
+        self.conv2 = nn.Conv2d(256, 256, 3, padding=1)
+        self.conv3 = nn.Conv2d(256, num_classes, 1)
+        
+        self.bn1 = nn.BatchNorm2d(256)
+        self.bn2 = nn.BatchNorm2d(256)
+        
+    def forward(self, x):
+        x = F.relu(self.bn1(self.conv1(x)))
+        x = F.relu(self.bn2(self.conv2(x)))
+        x = self.conv3(x)
+        return x
+
 class MultiScaleFeatureExtractor(nn.Module):
-    """多尺度特征提取器"""
-
+    """增强的多尺度特征提取器"""
     def __init__(self,
                  cnn_type: str = 'resnet50',
-                 pretrained: bool = True,
+                 weights: str = 'IMAGENET1K_V1',
                  output_dims: int = 2048,
-                 layers_to_extract: list = ['layer2', 'layer3', 'layer4']  # 修改默认值
+                 layers_to_extract: list = ['layer2', 'layer3', 'layer4']
                  ):
         super().__init__()
         self.cnn_type = cnn_type
         self.output_dims = output_dims
         self.layers_to_extract = layers_to_extract
-
-        # 加载预训练主干网络并拆分层
-        backbone = models.__dict__[cnn_type](pretrained=pretrained)
-
-        # 提取所有必要层（包含初始卷积层）
+        
+        # 加载预训练主干网络
+        if weights == 'IMAGENET1K_V1':
+            weights = models.ResNet50_Weights.IMAGENET1K_V1
+        elif weights == 'DEFAULT':
+            weights = models.ResNet50_Weights.DEFAULT
+        elif weights is None:
+            weights = None
+            
+        backbone = models.__dict__[cnn_type](weights=weights)
+        
+        # 提取所有必要层
         self.initial_layers = nn.Sequential(
-            backbone.conv1,  # 输入通道3 → 64
+            backbone.conv1,
             backbone.bn1,
             backbone.relu,
-            backbone.maxpool  # 输出通道64
+            backbone.maxpool
         )
+        
         self.feature_layers = nn.ModuleDict({
-            'layer1': backbone.layer1,  # 输入64 → 输出256
-            'layer2': backbone.layer2,  # 输入256 → 输出512
-            'layer3': backbone.layer3,  # 输入512 → 输出1024
-            'layer4': backbone.layer4  # 输入1024 → 输出2048
+            'layer1': backbone.layer1,
+            'layer2': backbone.layer2,
+            'layer3': backbone.layer3,
+            'layer4': backbone.layer4
         })
-
+        
+        # 特征金字塔网络
+        self.fpn = FeaturePyramidNetwork(
+            in_channels_list=[256, 512, 1024, 2048],
+            out_channels=256
+        )
+        
         # 多尺度特征融合
         self.fuse = nn.Sequential(
             nn.AdaptiveAvgPool2d(1),
             nn.Flatten(),
             nn.Linear(self._get_total_channels(cnn_type, layers_to_extract), output_dims),
-            nn.BatchNorm1d(output_dims, affine=True),  # 添加affine参数
+            nn.BatchNorm1d(output_dims, affine=True),
             nn.ReLU()
         )
-
+        
     def _get_total_channels(self, cnn_type: str, layers: list) -> int:
-        """计算多尺度特征的总通道数"""
         channel_map = {
             'resnet50': {'layer1': 256, 'layer2': 512, 'layer3': 1024, 'layer4': 2048},
             'resnet101': {'layer1': 256, 'layer2': 512, 'layer3': 1024, 'layer4': 2048}
         }
         return sum([channel_map[cnn_type][layer] for layer in layers])
-
-    def forward(self, x: Tensor) -> Tensor:
-        # 先经过初始卷积层
-        x = self.initial_layers(x)  # [B, 64, H/4, W/4]
-
-        # 提取指定层的多尺度特征
-        features = []
-        current_feat = x  # 保存当前特征，避免重复计算
+    
+    def forward(self, x: Tensor) -> tuple:
+        # 初始特征提取
+        x = self.initial_layers(x)
+        
+        # 提取多尺度特征
+        features = {}
+        current_feat = x
         for name, layer in self.feature_layers.items():
-            current_feat = layer(current_feat)  # 连续处理特征
-            if name in self.layers_to_extract:
-                features.append(current_feat)
-
-        # 多尺度特征融合
-        if len(features) > 1:
-            target_size = features[-1].shape[2:]
+            current_feat = layer(current_feat)
+            features[name] = current_feat
+        
+        # FPN特征增强
+        fpn_features = self.fpn(features)
+        
+        # 特征融合
+        if len(self.layers_to_extract) > 1:
+            selected_features = [features[name] for name in self.layers_to_extract]
+            target_size = selected_features[-1].shape[2:]
             resized_features = [
-                                   F.interpolate(feat, size=target_size, mode='bilinear', align_corners=False)
-                                   for feat in features[:-1]
-                               ] + [features[-1]]
+                F.interpolate(feat, size=target_size, mode='bilinear', align_corners=False)
+                for feat in selected_features[:-1]
+            ] + [selected_features[-1]]
             fused = torch.cat(resized_features, dim=1)
         else:
-            fused = features[0]
+            fused = features[self.layers_to_extract[0]]
+        
+        # 返回多个特征表示
+        return {
+            'global': F.normalize(self.fuse(fused), p=2, dim=1),  # 全局特征
+            'fpn': fpn_features,  # FPN特征
+            'final': features['layer4']  # 最后一层特征
+        }
 
-        # 降维到固定维度
-        return F.normalize(self.fuse(fused), p=2, dim=1)
+class FeaturePyramidNetwork(nn.Module):
+    """特征金字塔网络"""
+    def __init__(self, in_channels_list, out_channels):
+        super().__init__()
+        self.inner_blocks = nn.ModuleList()
+        self.layer_blocks = nn.ModuleList()
+        
+        for in_channels in in_channels_list:
+            inner_block = nn.Conv2d(in_channels, out_channels, 1)
+            layer_block = nn.Conv2d(out_channels, out_channels, 3, padding=1)
+            self.inner_blocks.append(inner_block)
+            self.layer_blocks.append(layer_block)
+            
+    def forward(self, x):
+        features = list(x.values())
+        last_inner = self.inner_blocks[-1](features[-1])
+        results = [self.layer_blocks[-1](last_inner)]
+        
+        for idx in range(len(features) - 2, -1, -1):
+            inner_lateral = self.inner_blocks[idx](features[idx])
+            feat_shape = inner_lateral.shape[-2:]
+            inner_top_down = F.interpolate(last_inner, size=feat_shape, mode="nearest")
+            last_inner = inner_lateral + inner_top_down
+            results.insert(0, self.layer_blocks[idx](last_inner))
+            
+        return results
 
-
-# ---------------------- 加权GAT模块 ----------------------
 class WeightedMultiHeadGAT(nn.Module):
-    """支持加权邻接矩阵的魔改多头GAT（可修改部分已标注）"""
-
+    """支持加权邻接矩阵的多头GAT"""
     def __init__(self,
                  in_features: int,
                  out_features: int,
@@ -101,289 +198,261 @@ class WeightedMultiHeadGAT(nn.Module):
         self.heads = heads
         self.alpha = alpha
         self.dropout = dropout
-        self.residual = residual  # 新增
+        self.residual = residual
         self.use_edge_weights = use_edge_weights
-
-        # 添加维度校验
+        
         assert out_features % heads == 0, f"out_features({out_features}) must be divisible by heads({heads})"
-        self.out_features_per_head = out_features // heads  # 修正为每个头的维度
-
-        # 修正线性层维度
+        self.out_features_per_head = out_features // heads
+        
         self.W = nn.Linear(in_features, heads * self.out_features_per_head, bias=False)
-
-        # 修正多头融合层
+        
         self.head_fusion = nn.Sequential(
-            nn.Linear(heads * self.out_features_per_head, out_features),  # 输入维度修正
+            nn.Linear(heads * self.out_features_per_head, out_features),
             nn.GELU(),
             nn.Dropout(dropout)
         )
-
-        # 注意力系数计算（含边权重）
+        
         if use_edge_weights:
-            self.edge_encoder = nn.Linear(edge_dim, self.heads)  # 边权重编码
+            self.edge_encoder = nn.Linear(edge_dim, self.heads)
         self.attn_src = nn.Parameter(torch.Tensor(1, self.heads, self.out_features_per_head))
         self.attn_dst = nn.Parameter(torch.Tensor(1, self.heads, self.out_features_per_head))
-
-        # 残差连接
+        
         if residual:
             self.res_fc = nn.Linear(in_features, heads * self.out_features_per_head)
-
-        # 初始化参数
+            
+        self._reset_parameters()
+        
+    def _reset_parameters(self):
+        """初始化参数"""
         nn.init.xavier_uniform_(self.W.weight)
         nn.init.xavier_uniform_(self.attn_src)
         nn.init.xavier_uniform_(self.attn_dst)
-        if use_edge_weights:
+        if self.use_edge_weights:
             nn.init.xavier_uniform_(self.edge_encoder.weight)
-
+            
     def forward(self, x: Tensor, adj_matrix: Tensor) -> Tensor:
         num_nodes = x.size(0)
-
-        # 1. 线性变换 + 分头
-        h = self.W(x)  # [num_nodes, heads * out_features_per_head]
-        h = h.view(num_nodes, self.heads, self.out_features_per_head)  # [N, H, D_h]
-
-        # 2. 计算注意力分数（含边权重）
-        attn_src = torch.sum(h * self.attn_src, dim=-1)  # [N, H]
-        attn_dst = torch.sum(h * self.attn_dst, dim=-1)  # [N, H]
-        attn = attn_src.unsqueeze(1) + attn_dst.unsqueeze(0)  # [N, N, H]
-
-        # 边权重编码（如果启用）
+        
+        # 线性变换 + 分头
+        h = self.W(x)
+        h = h.view(num_nodes, self.heads, self.out_features_per_head)
+        
+        # 计算注意力分数
+        attn_src = torch.sum(h * self.attn_src, dim=-1)
+        attn_dst = torch.sum(h * self.attn_dst, dim=-1)
+        attn = attn_src.unsqueeze(1) + attn_dst.unsqueeze(0)
+        
+        # 边权重编码
         if self.use_edge_weights:
-            edge_weights = self.edge_encoder(adj_matrix.unsqueeze(-1))  # [N, N, H]
+            edge_weights = self.edge_encoder(adj_matrix.unsqueeze(-1))
             attn = attn + edge_weights
-
-        # 3. 掩码处理（仅保留邻接矩阵中的边）
-        mask = (adj_matrix > 0).unsqueeze(-1)  # [N, N, 1]
+            
+        # 掩码处理
+        mask = (adj_matrix > 0).unsqueeze(-1)
         attn = attn.masked_fill(~mask, float('-inf'))
-
-        # 4. 注意力归一化
-        attn = F.leaky_relu(attn, self.alpha)  # [N, N, H]
-        attn = F.softmax(attn, dim=1)  # 按目标节点归一化
+        
+        # 注意力归一化
+        attn = F.leaky_relu(attn, self.alpha)
+        attn = F.softmax(attn, dim=1)
         attn = F.dropout(attn, p=self.dropout, training=self.training)
-
-        # 5. 特征聚合（加权求和）
-        h_out = torch.einsum('ijh,jhd->ihd', attn, h)  # [N, H, D_h]
-        h_out = h_out.reshape(num_nodes, self.heads * self.out_features_per_head)  # [N, H*D_h]
-
-        # 6. 残差连接
-        if self.res_fc is not None:
+        
+        # 特征聚合
+        h_out = torch.einsum('ijh,jhd->ihd', attn, h)
+        h_out = h_out.reshape(num_nodes, self.heads * self.out_features_per_head)
+        
+        # 残差连接
+        if self.residual and self.res_fc is not None:
             res = self.res_fc(x)
             h_out = h_out + res
-
-        # 修改后的多头融合方式
-        h_out = self.head_fusion(h_out)  # 新增多头交互层
-
+            
+        # 多头融合
+        h_out = self.head_fusion(h_out)
+        
         return h_out
 
-
-class StackedGAT(nn.Module):
-    """堆叠多层魔改GAT（可修改部分已标注）"""
-
-    def __init__(self,
-                 in_features: int,
-                 hidden_dims: list = [1024, 512, 256],  # 确保每层维度是heads的整数倍
-                 heads: int = 12,
-                 dropout: float = 0.3,
-                 edge_dim: int = 1,
-                 residual: bool = True):
-        super().__init__()
-        self.layers = nn.ModuleList()
-        dims = [in_features] + hidden_dims
-
-        # 添加维度校验
-        for i, h_dim in enumerate(hidden_dims):
-            assert h_dim % heads == 0, f"hidden_dim[{i}]({h_dim}) must be divisible by heads({heads})"
-
-        # 构建GAT层
-        for in_dim, out_dim in zip(dims[:-1], dims[1:]):
-            self.layers.append(
-                WeightedMultiHeadGAT(
-                    in_features=in_dim,
-                    out_features=out_dim,
-                    heads=heads,
-                    dropout=dropout,
-                    edge_dim=edge_dim,
-                    residual=residual
-                )
-            )
-
-    def forward(self, x: Tensor, adj_matrix: Tensor) -> Tensor:
-        for layer in self.layers:
-            x = layer(x, adj_matrix)
-        return x
-
-
-# ---------------------- GCN分类模块 ----------------------
-class GCNClassifier(nn.Module):
-    """GCN分类器（可修改部分已标注）"""
-
-    def __init__(self,
-                 in_features: int,
-                 num_classes: int,  # 可修改：类别数
-                 hidden_dims: list = [128]  # 可修改：隐藏层维度
-                 ):
-        super().__init__()
-        self.layers = nn.ModuleList()
-        dims = [in_features] + hidden_dims + [num_classes]
-        for i in range(len(dims) - 1):
-            self.layers.append(
-                GCNConv(dims[i], dims[i + 1])
-            )
-            if i != len(dims) - 2:
-                self.layers.append(nn.ReLU())
-                self.layers.append(nn.BatchNorm1d(dims[i + 1]))
-
-    def forward(self, x: Tensor, edge_index: Tensor) -> Tensor:
-        for layer in self.layers:
-            if isinstance(layer, GCNConv):
-                x = layer(x, edge_index)
-            else:
-                x = layer(x)
-        return torch.sigmoid(x)  # 多标签分类用Sigmoid
-
-
-# ---------------------- 端到端模型 ----------------------
 class FullModel(nn.Module):
-    """端到端模型（修正输入处理）"""
-
+    """增强的端到端模型"""
     def __init__(self,
                  cnn_feat_dim: int = 2048,
-                 gat_dims: list = [1020, 504, 252],  # 调整为12的倍数
+                 gat_dims: list = None,  # 修改为可选参数
                  num_classes: int = None,
                  gat_heads: int = 12,
-                 gat_dropout: float = 0.3):
+                 gat_dropout: float = 0.3,
+                 enable_landmarks: bool = True,
+                 enable_segmentation: bool = True):
         super().__init__()
+        
+        # 如果没有指定GAT维度，则根据CNN特征维度自动设置
+        # 确保所有维度都能被注意力头数整除
+        if gat_dims is None:
+            gat_dims = [cnn_feat_dim, 1032, 504]  # 1032和504都能被12整除
+            
+        # 读取属性信息
         if num_classes is None:
-            train_df = pd.read_csv("data/train_labels.csv")
-            num_classes = len(train_df.columns) - 1
-
-        # 1. 修改CNN特征提取器
+            attr_stats = pd.read_csv(ATTR_STATS_FILE)
+            num_classes = len(attr_stats)
+            
+        self.enable_landmarks = enable_landmarks
+        self.enable_segmentation = enable_segmentation
+        
+        # CNN特征提取器
         self.cnn = MultiScaleFeatureExtractor(
-            cnn_type='resnet50',  # 显式指定模型类型
-            pretrained=True,  # 确保使用预训练权重
+            cnn_type='resnet50',
+            weights='IMAGENET1K_V1',
             output_dims=cnn_feat_dim,
-            layers_to_extract=['layer3', 'layer4']  # 减少使用的层数
+            layers_to_extract=['layer2', 'layer3', 'layer4']
         )
-
-        # 2. 简化GAT结构
-        self.gat = StackedGAT(
-            in_features=cnn_feat_dim,
-            hidden_dims=gat_dims,  # 使用修正后的维度
-            heads=gat_heads,
-            dropout=gat_dropout
+        
+        # GAT特征增强
+        self.gat = nn.ModuleList([
+            WeightedMultiHeadGAT(
+                in_features=gat_dims[i],
+                out_features=gat_dims[i+1],
+                heads=gat_heads,
+                dropout=gat_dropout
+            )
+            for i in range(len(gat_dims)-1)
+        ])
+        
+        # 属性分类器
+        self.classifier = nn.Sequential(
+            nn.Linear(gat_dims[-1], 512),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(512, num_classes)
         )
-
-        # 3. 调整GCN分类器
-        self.gcn = GCNClassifier(
-            in_features=gat_dims[-1],
-            num_classes=num_classes,
-            hidden_dims=[256]  # 简化隐藏层
-        )
-
-        # 4. 添加Dropout层
-        self.dropout = nn.Dropout(0.3)
-
-        # 增加GAT后归一化
+        
+        # 关键点检测分支
+        if enable_landmarks:
+            self.landmark_branch = LandmarkBranch(
+                in_channels=2048,  # ResNet最后一层的通道数
+                num_landmarks=8  # 全身服装的关键点数
+            )
+            
+        # 分割分支
+        if enable_segmentation:
+            self.segmentation_branch = SegmentationBranch(
+                in_channels=2048,
+                num_classes=1  # 二值分割
+            )
+            
+        # 特征归一化
         self.gat_norm = nn.LayerNorm(gat_dims[-1])
-
-    def forward(self, x_img: Tensor) -> Tensor:
+        
+    def forward(self, x_img: Tensor) -> dict:
         # 1. CNN特征提取
         features = self.cnn(x_img)
-        features = self.dropout(features)
-
-        # 2. 构建加权邻接矩阵（使用余弦相似度）
+        
+        # 2. 构建加权邻接矩阵
+        global_features = features['global']
         sim_matrix = F.cosine_similarity(
-            features.unsqueeze(1),
-            features.unsqueeze(0),
+            global_features.unsqueeze(1),
+            global_features.unsqueeze(0),
             dim=2
         )
         adj_matrix = (sim_matrix + 1) / 2
-
+        
         # 3. GAT特征增强
-        gat_out = self.gat(features, adj_matrix)
-        gat_out = self.gat_norm(gat_out)  # 新增层归一化
-        gat_out = F.leaky_relu(gat_out, 0.2)
-        gat_out = self.dropout(gat_out)
-
-        # 4. GCN分类
-        edge_index = adj_matrix.nonzero().t()
-        logits = self.gcn(gat_out, edge_index)
-
-        return logits
-
-
-class ImageGraphPipeline(nn.Module):
-    """端到端图像处理管道"""
-
-    def __init__(self,
-                 model: nn.Module,
-                 img_size: int = 224,
-                 mean: list = [0.485, 0.456, 0.406],
-                 std: list = [0.229, 0.224, 0.225]):
-        super().__init__()
-        self.model = model
-        self.preprocess = transforms.Compose([
-            transforms.Resize((img_size, img_size)),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=mean, std=std)
-        ])
-
-    def forward(self, image_path: str) -> Tensor:
-        """处理单张图像时自动切换评估模式"""
-        # 确保使用评估模式
-        self.model.eval()
-
-        with torch.no_grad():
-            img = Image.open(image_path).convert('RGB')
-            img_tensor = self.preprocess(img).unsqueeze(0)  # [1, C, H, W]
-
-            # 临时禁用BatchNorm的验证
-            with torch.no_grad():
-                output = self.model(img_tensor)
-
-        return output[0]
-
+        x = global_features
+        for gat_layer in self.gat:
+            x = gat_layer(x, adj_matrix)
+        x = self.gat_norm(x)
+        x = F.leaky_relu(x, 0.2)
+        
+        # 4. 属性分类
+        attr_logits = self.classifier(x)
+        
+        # 准备输出
+        outputs = {
+            'attr_logits': attr_logits,
+            'features': features
+        }
+        
+        # 5. 关键点检测（如果启用）
+        if self.enable_landmarks:
+            landmark_coords, landmark_vis = self.landmark_branch(features['final'])
+            outputs.update({
+                'landmark_coords': landmark_coords,
+                'landmark_vis': landmark_vis
+            })
+            
+        # 6. 分割（如果启用）
+        if self.enable_segmentation:
+            seg_logits = self.segmentation_branch(features['final'])
+            outputs['seg_logits'] = seg_logits
+            
+        return outputs
 
 class FocalLoss(nn.Module):
-    def __init__(self, gamma=2.0, alpha=0.25):
+    """改进的Focal Loss"""
+    def __init__(self, gamma=2.0, alpha=0.25, reduction='mean'):
         super().__init__()
         self.gamma = gamma
         self.alpha = alpha
-
+        self.reduction = reduction
+        
     def forward(self, inputs, targets):
         bce_loss = F.binary_cross_entropy_with_logits(
             inputs, targets, reduction='none')
         pt = torch.exp(-bce_loss)
         focal_loss = self.alpha * (1 - pt) ** self.gamma * bce_loss
-        return focal_loss.mean()
+        
+        if self.reduction == 'mean':
+            return focal_loss.mean()
+        elif self.reduction == 'sum':
+            return focal_loss.sum()
+        return focal_loss
 
+class MultiTaskLoss(nn.Module):
+    """多任务损失"""
+    def __init__(self,
+                 num_tasks=3,
+                 reduction='mean',
+                 device=None):
+        super().__init__()
+        self.num_tasks = num_tasks
+        self.reduction = reduction
+        self.device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        
+        # 初始化任务权重并移动到正确的设备
+        self.log_vars = nn.Parameter(torch.zeros(num_tasks, device=self.device))
+        
+    def forward(self, losses):
+        # 确保losses在正确的设备上
+        if not isinstance(losses, torch.Tensor):
+            losses = torch.stack(losses).to(self.device)
+        elif losses.device != self.device:
+            losses = losses.to(self.device)
+            
+        # 动态权重
+        weights = torch.exp(-self.log_vars)
+        
+        # 加权损失
+        weighted_losses = weights * losses + 0.5 * self.log_vars
+        
+        if self.reduction == 'mean':
+            return weighted_losses.mean()
+        elif self.reduction == 'sum':
+            return weighted_losses.sum()
+        return weighted_losses
 
-# ---------------------- 测试用例 ----------------------
+# 测试用例
 if __name__ == "__main__":
-    # 初始化完整管道
-    pipeline = ImageGraphPipeline(FullModel())
-
-    # 单张图像处理示例
-    output = pipeline("images/image02.jpg")
-    print("单张图像预测结果:", output.shape)  # [20]
-
-    # 批量处理示例
-    batch_images = [torch.randn(3, 224, 224) for _ in range(4)]
-    batch_tensor = torch.stack(batch_images)  # [4, 3, 224, 224]
-    print("批量预测维度:", FullModel()(batch_tensor).shape)  # [4, 20]
-
-    # 测试GAT层初始化
-    layer = WeightedMultiHeadGAT(
-        in_features=2048,
-        out_features=1020,
-        heads=12,
-        alpha=0.3  # 显式设置alpha值
+    # 初始化完整模型
+    model = FullModel(
+        enable_landmarks=True,
+        enable_segmentation=True
     )
-    print(layer.alpha)  # 应输出0.3
-
-    # 测试残差连接配置
-    layer_with_res = WeightedMultiHeadGAT(2048, 1020, residual=True)
-    layer_without_res = WeightedMultiHeadGAT(2048, 1020, residual=False)
-
-    print("带残差连接:", hasattr(layer_with_res.res_fc, 'weight'))  # 应输出True
-    print("无残差连接:", layer_without_res.res_fc is None)  # 应输出True
+    
+    # 测试单张图像
+    x = torch.randn(1, 3, 224, 224)
+    outputs = model(x)
+    
+    print("输出:")
+    for k, v in outputs.items():
+        if isinstance(v, torch.Tensor):
+            print(f"{k}: {v.shape}")
+        elif isinstance(v, dict):
+            print(f"{k}:")
+            for sub_k, sub_v in v.items():
+                print(f"  {sub_k}: {sub_v.shape}")

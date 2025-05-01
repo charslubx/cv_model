@@ -10,7 +10,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-def train_model(train_csv, image_dir, epochs=50, num_classes=None):
+def train_model(train_csv, val_csv, image_dir, epochs=50, num_classes=None):
     """训练模型"""
     try:
         # 创建数据转换
@@ -21,33 +21,33 @@ def train_model(train_csv, image_dir, epochs=50, num_classes=None):
         train_dataset = MultiLabelDataset(
             csv_path=train_csv,
             image_dir=image_dir,
-            transform=train_transform  # 确保提供转换
+            transform=train_transform
+        )
+
+        val_dataset = MultiLabelDataset(
+            csv_path=val_csv,
+            image_dir=image_dir,
+            transform=val_transform
         )
 
         logger.info(f"创建的训练数据集大小: {len(train_dataset)}")
+        logger.info(f"创建的验证数据集大小: {len(val_dataset)}")
 
         # 添加数据集有效性检查
         if len(train_dataset) < 10:
-            raise ValueError(f"数据集样本不足 ({len(train_dataset)}), 至少需要10个有效样本")
-
-        # 分割训练集和验证集 (80/20)
-        total_size = len(train_dataset)
-        train_size = int(0.8 * total_size)
-        val_size = total_size - train_size
-
-        train_subset, val_subset = torch.utils.data.random_split(
-            train_dataset, [train_size, val_size]
-        )
+            raise ValueError(f"训练集样本不足 ({len(train_dataset)}), 至少需要10个有效样本")
+        if len(val_dataset) < 5:
+            raise ValueError(f"验证集样本不足 ({len(val_dataset)}), 至少需要5个有效样本")
 
         # 创建数据加载器
         train_loader = create_safe_loader(
-            train_subset,
+            train_dataset,
             batch_size=32,
             shuffle=True
         )
 
         val_loader = create_safe_loader(
-            val_subset,
+            val_dataset,
             batch_size=32,
             shuffle=False
         )
@@ -61,7 +61,7 @@ def train_model(train_csv, image_dir, epochs=50, num_classes=None):
             model=model,
             train_loader=train_loader,
             val_loader=val_loader,
-            learning_rate=3e-4  # 设置最大学习率
+            learning_rate=3e-4
         )
 
         # 开始训练
@@ -97,6 +97,7 @@ if __name__ == "__main__":
     # 训练模型
     train_model(
         train_csv="data/train_labels.csv",
+        val_csv="data/val_labels.csv",
         image_dir="data/images",
         epochs=50,
         num_classes=num_attributes
