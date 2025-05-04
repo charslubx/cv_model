@@ -2,11 +2,11 @@ import json
 import logging
 import os
 import copy
+import random
 
 import torch
 import optuna
 import numpy as np
-import pandas as pd
 import torch.nn as nn
 import matplotlib.pyplot as plt
 from torch.utils.data.sampler import SubsetRandomSampler
@@ -28,19 +28,27 @@ logger = logging.getLogger(__name__)
 ImageFile.LOAD_TRUNCATED_IMAGES = True  # 允许加载截断的图像
 
 # DeepFashion数据集路径
-DEEPFASHION_ROOT = "deepfashion"
+DEEPFASHION_ROOT = "/home/cv_model/deepfashion"
 CATEGORY_ROOT = os.path.join(DEEPFASHION_ROOT, "Category and Attribute Prediction Benchmark")
-CATEGORY_IMG_DIR = os.path.join(CATEGORY_ROOT, "Img", "img")
+CATEGORY_IMG_DIR = os.path.join(CATEGORY_ROOT, "Img", "img_highres/img_highres")
 CATEGORY_ANNO_DIR = os.path.join(CATEGORY_ROOT, "Anno_fine")
+
+# Fashion Landmark Detection Benchmark路径
+LANDMARK_ROOT = os.path.join(DEEPFASHION_ROOT, "Fashion Landmark Detection Benchmark")
+LANDMARK_ANNO_DIR = os.path.join(LANDMARK_ROOT, "Anno")
 
 # 数据集文件
 TRAIN_ATTR_FILE = os.path.join(CATEGORY_ANNO_DIR, "train_attr.txt")
 VAL_ATTR_FILE = os.path.join(CATEGORY_ANNO_DIR, "val_attr.txt")
 TEST_ATTR_FILE = os.path.join(CATEGORY_ANNO_DIR, "test_attr.txt")
+TRAIN_SEG_FILE = os.path.join(CATEGORY_ANNO_DIR, "train_seg.txt")
+VAL_SEG_FILE = os.path.join(CATEGORY_ANNO_DIR, "val_seg.txt")
+TEST_SEG_FILE = os.path.join(CATEGORY_ANNO_DIR, "test_seg.txt")
 
-TRAIN_LANDMARK_FILE = os.path.join(CATEGORY_ANNO_DIR, "train_landmarks.txt")
-VAL_LANDMARK_FILE = os.path.join(CATEGORY_ANNO_DIR, "val_landmarks.txt")
-TEST_LANDMARK_FILE = os.path.join(CATEGORY_ANNO_DIR, "test_landmarks.txt")
+# 关键点标注文件
+TRAIN_LANDMARK_FILE = os.path.join(LANDMARK_ANNO_DIR, "list_landmarks.txt")
+VAL_LANDMARK_FILE = os.path.join(LANDMARK_ANNO_DIR, "list_landmarks.txt")  # 使用同一个文件，后面根据eval partition拆分
+TEST_LANDMARK_FILE = os.path.join(LANDMARK_ANNO_DIR, "list_landmarks.txt")
 
 # 属性和类别定义文件
 ATTR_CLOTH_FILE = os.path.join(CATEGORY_ANNO_DIR, "list_attr_cloth.txt")
@@ -51,24 +59,20 @@ CATEGORY_EVAL_DIR = os.path.join(CATEGORY_ROOT, "Eval")
 
 # In-shop Clothes Retrieval Benchmark
 INSHOP_ROOT = os.path.join(DEEPFASHION_ROOT, "In-shop Clothes Retrieval Benchmark")
-INSHOP_IMG_DIR = os.path.join(INSHOP_ROOT, "Img/img")
+INSHOP_IMG_DIR = os.path.join(INSHOP_ROOT, "Img/img_highres/img_highres")
 INSHOP_ANNO_DIR = os.path.join(INSHOP_ROOT, "Anno")
 INSHOP_EVAL_DIR = os.path.join(INSHOP_ROOT, "Eval")
 
 # Consumer-to-shop Clothes Retrieval Benchmark
 CONSUMER2SHOP_ROOT = os.path.join(DEEPFASHION_ROOT, "Consumer-to-shop Clothes Retrieval Benchmark")
-CONSUMER2SHOP_IMG_DIR = os.path.join(CONSUMER2SHOP_ROOT, "Img/img")
+CONSUMER2SHOP_IMG_DIR = os.path.join(CONSUMER2SHOP_ROOT, "Img/img_highres/img_highres")
 CONSUMER2SHOP_ANNO_DIR = os.path.join(CONSUMER2SHOP_ROOT, "Anno")
 CONSUMER2SHOP_EVAL_DIR = os.path.join(CONSUMER2SHOP_ROOT, "Eval")
-
-# Fashion Landmark Detection Benchmark
-LANDMARK_ROOT = os.path.join(DEEPFASHION_ROOT, "Fashion Landmark Detection Benchmark")
-LANDMARK_IMG_DIR = os.path.join(LANDMARK_ROOT, "Img")
-LANDMARK_ANNO_DIR = os.path.join(LANDMARK_ROOT, "Anno")
 
 # 定义标注文件路径
 ATTR_IMG_FILE = os.path.join(CATEGORY_ANNO_DIR, "list_attr_img.txt")
 EVAL_PARTITION_FILE = os.path.join(CATEGORY_EVAL_DIR, "list_eval_partition.txt")
+
 
 # ---------------------- 增强的数据验证类 ----------------------
 class DataValidator:
@@ -110,41 +114,42 @@ class DataValidator:
 # ---------------------- 改进的数据集类 ----------------------
 class DeepFashionDataset(Dataset):
     """DeepFashion多任务数据集"""
+
     def __init__(self,
                  img_list_file: str,  # 图片列表文件
-                 attr_file: str,      # 属性标注文件
-                 cate_file: str = None,    # 类别标注文件
-                 bbox_file: str = None,    # 边界框标注文件
-                 landmark_file: str = None, # 关键点标注文件
-                 image_dir: str = None,     # 图像根目录
+                 attr_file: str,  # 属性标注文件
+                 cate_file: str = None,  # 类别标注文件
+                 bbox_file: str = None,  # 边界框标注文件
+                 seg_file: str = None,  # 分割标注文件
+                 image_dir: str = None,  # 图像根目录
                  transform=None,
                  max_retry: int = 5):
-        """
-        初始化数据集
+        """初始化数据集
+
         Args:
-            img_list_file: 图片列表文件路径（train.txt/val.txt/test.txt）
-            attr_file: 属性标注文件路径（train_attr.txt等）
-            cate_file: 类别标注文件路径（train_cate.txt等）
-            bbox_file: 边界框标注文件路径（train_bbox.txt等）
-            landmark_file: 关键点标注文件路径（train_landmark.txt等）
-            image_dir: 图像根目录
-            transform: 数据增强转换
-            max_retry: 最大重试次数
+            img_list_file: 图片列表文件路径
+            attr_file: 属性标注文件路径
+            cate_file: 类别标注文件路径（可选）
+            bbox_file: 边界框标注文件路径（可选）
+            seg_file: 分割标注文件路径（可选）
+            image_dir: 图像根目录路径（可选）
+            transform: 数据增强和预处理
+            max_retry: 加载失败时的最大重试次数
         """
-        super().__init__()
         self.transform = transform
-        self.max_retry = max_retry
         self.image_dir = image_dir
-        
+        self.max_retry = max_retry
+        self.attr_file = attr_file  # 保存属性文件路径
+
         # 读取图片列表
         try:
             with open(img_list_file, 'r', encoding='utf-8') as f:
-                self.img_paths = [line.strip() for line in f.readlines()]
+                self.img_paths = [line.strip() for line in f]
             logger.info(f"读取了 {len(self.img_paths)} 个图片路径")
         except Exception as e:
             logger.error(f"读取图片列表文件失败: {str(e)}")
             raise
-            
+
         # 读取属性标注
         try:
             data = []
@@ -152,12 +157,13 @@ class DeepFashionDataset(Dataset):
                 for line in f:
                     attrs = [int(x) for x in line.strip().split()]
                     data.append(attrs)
+
             self.attr_labels = torch.tensor(data, dtype=torch.float32)
             logger.info(f"读取了 {len(self.attr_labels)} 个属性标注")
         except Exception as e:
             logger.error(f"读取属性标注文件失败: {str(e)}")
             raise
-            
+
         # 读取类别标注（如果有）
         self.cate_labels = None
         if cate_file and os.path.exists(cate_file):
@@ -171,7 +177,7 @@ class DeepFashionDataset(Dataset):
                 logger.info(f"读取了 {len(self.cate_labels)} 个类别标注")
             except Exception as e:
                 logger.error(f"读取类别标注文件失败: {str(e)}")
-                
+
         # 读取边界框标注（如果有）
         self.bbox_labels = None
         if bbox_file and os.path.exists(bbox_file):
@@ -186,86 +192,117 @@ class DeepFashionDataset(Dataset):
                 logger.info(f"读取了 {len(self.bbox_labels)} 个边界框标注")
             except Exception as e:
                 logger.error(f"读取边界框标注文件失败: {str(e)}")
-                
-        # 读取关键点标注（如果有）
-        self.landmark_labels = None
-        if landmark_file and os.path.exists(landmark_file):
+
+        # 读取分割标注（如果有）
+        self.seg_labels = None
+        if seg_file and os.path.exists(seg_file):
             try:
-                landmarks = []
-                with open(landmark_file, 'r', encoding='utf-8') as f:
+                segmentations = []
+                with open(seg_file, 'r', encoding='utf-8') as f:
                     for line in f:
-                        # x, y, visibility for each landmark
-                        coords = [float(x) for x in line.strip().split()]
-                        landmarks.append(coords)
-                self.landmark_labels = torch.tensor(landmarks, dtype=torch.float32)
-                logger.info(f"读取了 {len(self.landmark_labels)} 个关键点标注")
+                        # 假设分割标注是二值图像，展平为一维向量
+                        seg = [float(x) for x in line.strip().split()]
+                        segmentations.append(seg)
+                self.seg_labels = torch.tensor(segmentations, dtype=torch.float32)
+                logger.info(f"读取了 {len(self.seg_labels)} 个分割标注")
             except Exception as e:
-                logger.error(f"读取关键点标注文件失败: {str(e)}")
-                
+                logger.error(f"读取分割标注文件失败: {str(e)}")
+
         # 验证数据一致性
         self._validate_data()
-        
+
+    def get_attr_names(self):
+        """获取属性名称列表"""
+        try:
+            # 从属性文件路径推断属性定义文件路径
+            attr_dir = os.path.dirname(self.attr_file)
+            attr_cloth_file = os.path.join(attr_dir, "list_attr_cloth.txt")
+
+            if not os.path.exists(attr_cloth_file):
+                logger.warning(f"找不到属性定义文件: {attr_cloth_file}")
+                # 如果找不到属性定义文件，返回数字索引作为属性名称
+                return [f"attr_{i}" for i in range(self.attr_labels.shape[1])]
+
+            # 读取属性定义文件
+            with open(attr_cloth_file, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+                # 跳过前两行（属性数量和表头）
+                attr_names = [line.strip().split()[0] for line in lines[2:]]
+
+            logger.info(f"读取了 {len(attr_names)} 个属性名称")
+            return attr_names
+
+        except Exception as e:
+            logger.error(f"读取属性名称失败: {str(e)}")
+            # 发生错误时返回数字索引作为属性名称
+            return [f"attr_{i}" for i in range(self.attr_labels.shape[1])]
+
     def _validate_data(self):
         """验证所有标注数据的样本数量是否一致"""
         num_samples = len(self.img_paths)
-        
+
         if len(self.attr_labels) != num_samples:
             raise ValueError(f"属性标注数量({len(self.attr_labels)})与图片数量({num_samples})不匹配")
-            
+
         if self.cate_labels is not None and len(self.cate_labels) != num_samples:
             raise ValueError(f"类别标注数量({len(self.cate_labels)})与图片数量({num_samples})不匹配")
-            
+
         if self.bbox_labels is not None and len(self.bbox_labels) != num_samples:
             raise ValueError(f"边界框标注数量({len(self.bbox_labels)})与图片数量({num_samples})不匹配")
-            
-        if self.landmark_labels is not None and len(self.landmark_labels) != num_samples:
-            raise ValueError(f"关键点标注数量({len(self.landmark_labels)})与图片数量({num_samples})不匹配")
-        
+
+        if self.seg_labels is not None and len(self.seg_labels) != num_samples:
+            raise ValueError(f"分割标注数量({len(self.seg_labels)})与图片数量({num_samples})不匹配")
+
     def __getitem__(self, idx):
-        """获取数据集中的一个样本"""
-        for _ in range(self.max_retry):
+        """获取单个样本"""
+        retry_count = 0
+        while retry_count < self.max_retry:
             try:
-                # 获取图像路径（图片列表中的路径已经包含了相对路径）
-                img_path = os.path.join(self.image_dir, self.img_paths[idx])
-                
-                # 读取图像
-                if os.path.exists(img_path):
-                    image = Image.open(img_path).convert('RGB')
-                    if self.transform:
-                        image = self.transform(image)
-                else:
-                    logger.warning(f"图像文件不存在: {img_path}")
-                    idx = (idx + 1) % len(self.img_paths)
-                    continue
-                
-                # 准备输出数据
-                output = {
+                # 获取图片路径
+                img_path = self.img_paths[idx]
+                if self.image_dir:
+                    img_path = os.path.join(self.image_dir, img_path)
+
+                # 获取图像名称（包含相对路径）
+                img_name = img_path
+
+                # 读取图片
+                image = Image.open(img_path).convert('RGB')
+
+                # 数据增强
+                if self.transform:
+                    image = self.transform(image)
+
+                # 准备样本数据
+                sample = {
                     'image': image,
-                    'attr_labels': self.attr_labels[idx]
+                    'img_name': img_name,
+                    'attr_labels': self.attr_labels[idx],
                 }
-                
-                # 添加类别标注（如果有）
+
+                # 添加类别标签（如果有）
                 if self.cate_labels is not None:
-                    output['category'] = self.cate_labels[idx]
-                    
-                # 添加边界框标注（如果有）
+                    sample['category_labels'] = self.cate_labels[idx]
+
+                # 添加边界框标签（如果有）
                 if self.bbox_labels is not None:
-                    output['bbox'] = self.bbox_labels[idx]
-                    
-                # 添加关键点标注（如果有）
-                if self.landmark_labels is not None:
-                    landmarks = self.landmark_labels[idx].reshape(-1, 3)  # reshape to (num_landmarks, 3)
-                    output['landmarks'] = landmarks
-                    
-                return output
-                    
+                    sample['bbox_labels'] = self.bbox_labels[idx]
+
+                # 添加分割标签（如果有）
+                if self.seg_labels is not None:
+                    sample['segmentation'] = self.seg_labels[idx]
+
+                return sample
+
             except Exception as e:
-                logger.warning(f"处理样本时出错: {str(e)}")
-                idx = (idx + 1) % len(self.img_paths)
-                continue
-                
-        raise RuntimeError(f"在 {self.max_retry} 次尝试后未能获取有效样本")
-        
+                retry_count += 1
+                logger.warning(f"加载样本 {idx} 失败 (尝试 {retry_count}/{self.max_retry}): {str(e)}")
+                if retry_count == self.max_retry:
+                    logger.error(f"无法加载样本 {idx}，已达到最大重试次数")
+                    raise RuntimeError(f"无法加载样本 {idx}")
+                # 随机选择另一个样本
+                idx = random.randint(0, len(self) - 1)
+
     def __len__(self):
         """返回数据集的总样本数"""
         return len(self.img_paths)
@@ -274,29 +311,28 @@ class DeepFashionDataset(Dataset):
 # ---------------------- 训练模块 ----------------------
 class DeepFashionTrainer:
     """DeepFashion多任务训练器"""
+
     def __init__(self,
                  model: nn.Module,
                  train_loader: DataLoader,
                  val_loader: DataLoader,
                  device: str = "cuda" if torch.cuda.is_available() else "cpu",
                  learning_rate: float = 3e-4,
-                 enable_landmarks: bool = True,
                  enable_segmentation: bool = True):
-        
+
         self.model = model.to(device)
         self.train_loader = train_loader
         self.val_loader = val_loader
         self.device = device
-        self.enable_landmarks = enable_landmarks
         self.enable_segmentation = enable_segmentation
-        
+
         # 优化器配置
         self.optimizer = torch.optim.AdamW(
             model.parameters(),
             lr=learning_rate,
             weight_decay=0.15
         )
-        
+
         # 学习率调度器
         self.scheduler = torch.optim.lr_scheduler.OneCycleLR(
             self.optimizer,
@@ -305,197 +341,151 @@ class DeepFashionTrainer:
             steps_per_epoch=len(train_loader),
             pct_start=0.3
         )
-        
+
         # 损失函数
         self.attr_criterion = FocalLoss(gamma=4.0, alpha=0.5)
-        self.landmark_criterion = nn.MSELoss()
         self.segmentation_criterion = nn.BCEWithLogitsLoss()
-        
+
         # 多任务损失
-        num_tasks = 1 + int(enable_landmarks) + int(enable_segmentation)
+        num_tasks = 1 + int(enable_segmentation)
         self.multi_task_loss = MultiTaskLoss(
             num_tasks=num_tasks,
             device=device
         )
-        
+
         # EMA模型
         self.ema = torch.optim.swa_utils.AveragedModel(model)
         self.ema_start = 20
-        
+
         # 梯度缩放器
         self.scaler = torch.amp.GradScaler('cuda')
-        
+
         # 早停
         self.patience = 15
         self.best_val_loss = float('inf')
         self.patience_counter = 0
-        
+
         # 当前epoch
         self.current_epoch = 0
-        
+
         # 多GPU支持
         if torch.cuda.device_count() > 1:
             self.model = nn.DataParallel(self.model)
             logger.info(f"使用 {torch.cuda.device_count()} 个GPU!")
-            
+
     def _train_step(self, batch):
         """执行单个训练步骤
-        
+
         Args:
             batch: 包含图像和标签的批次数据
-            
+
         Returns:
             dict: 包含各项损失的字典
         """
         # 将数据移到设备上
         images = batch['image'].to(self.device)
         attr_labels = batch['attr_labels'].to(self.device)
-        
-        # 获取其他任务的标签（如果有）
-        landmark_labels = batch.get('landmarks')
-        if landmark_labels is not None:
-            landmark_labels = landmark_labels.to(self.device)
-            
+        img_names = batch['img_name']  # 获取图像名称
+
+        # 获取分割任务的标签（如果有）
         seg_labels = batch.get('segmentation')
         if seg_labels is not None:
             seg_labels = seg_labels.to(self.device)
-            
+
         # 清零梯度
         self.optimizer.zero_grad()
-        
+
         # 使用AMP进行前向传播
         with torch.amp.autocast('cuda'):
-            outputs = self.model(images)
-            
+            outputs = self.model(images, img_names)  # 传递图像名称
+
             # 计算各任务的损失
-            losses = []
-            metrics = {}
-            
+            losses = {}
+
             # 1. 属性分类损失
             attr_loss = self.attr_criterion(outputs['attr_logits'], attr_labels)
-            losses.append(attr_loss)
-            metrics['attr_loss'] = attr_loss.item()
-            
-            # 2. 关键点检测损失（如果启用）
-            if self.enable_landmarks and landmark_labels is not None:
-                landmark_coords = outputs['landmark_coords']
-                landmark_vis = outputs['landmark_vis']
-                # 只计算可见关键点的损失
-                vis_mask = landmark_labels[:, :, 2] > 0
-                if vis_mask.any():
-                    landmark_loss = self.landmark_criterion(
-                        landmark_coords[vis_mask],
-                        landmark_labels[vis_mask, :2]
-                    )
-                    losses.append(landmark_loss)
-                    metrics['landmark_loss'] = landmark_loss.item()
-                
-            # 3. 分割损失（如果启用）
+            losses['attr_loss'] = attr_loss
+
+            # 2. 分割损失（如果启用）
             if self.enable_segmentation and seg_labels is not None:
-                seg_loss = self.segmentation_criterion(
-                    outputs['seg_logits'],
-                    seg_labels
-                )
-                losses.append(seg_loss)
-                metrics['seg_loss'] = seg_loss.item()
-                
+                seg_loss = self.segmentation_criterion(outputs['seg_logits'], seg_labels)
+                losses['seg_loss'] = seg_loss
+
             # 计算总损失
-            total_loss = self.multi_task_loss(torch.stack(losses))
-            metrics['total_loss'] = total_loss.item()
-            
+            total_loss = sum(losses.values())
+            losses['total_loss'] = total_loss
+
         # 反向传播
         self.scaler.scale(total_loss).backward()
-        
-        # 梯度裁剪
-        self.scaler.unscale_(self.optimizer)
-        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-        
-        # 优化器步进
         self.scaler.step(self.optimizer)
         self.scaler.update()
-        
+
         # 更新学习率
         self.scheduler.step()
-        
+
         # 更新EMA模型
         if self.current_epoch >= self.ema_start:
             self.ema.update_parameters(self.model)
-            
-        return metrics
+
+        return losses
 
     def train_epoch(self):
         self.model.train()
         metrics = {
             'total_loss': 0.0,
             'attr_loss': 0.0,
-            'landmark_loss': 0.0,
             'seg_loss': 0.0
         }
-        
+
         # 添加进度条
         pbar = tqdm(self.train_loader)
         for batch in pbar:
             # 训练步骤
             loss = self._train_step(batch)
-            
+
             # 更新指标
             for k, v in loss.items():
                 metrics[k] += v
-                
+
             # 更新进度条
-            pbar.set_postfix({k: f'{v/len(pbar):.4f}' for k, v in metrics.items()})
-            
-        return {k: v/len(self.train_loader) for k, v in metrics.items()}
-        
+            pbar.set_postfix({k: f'{v / len(pbar):.4f}' for k, v in metrics.items()})
+
+        return {k: v / len(self.train_loader) for k, v in metrics.items()}
+
     def validate(self):
         # 使用EMA模型进行验证
         if self.current_epoch >= self.ema_start:
             eval_model = self.ema.module
         else:
             eval_model = self.model
-            
+
         eval_model.eval()
         val_loss = 0.0
         attr_correct = 0
         attr_total = 0
-        landmark_error = 0.0
-        landmark_count = 0
         seg_iou = 0.0
         seg_count = 0
-        
+
         with torch.no_grad():
             for batch in self.val_loader:
                 images = batch['image'].to(self.device)
                 attr_labels = batch['attr_labels'].to(self.device)
-                
-                # 获取其他任务的标签
-                landmark_labels = batch.get('landmarks')
-                if landmark_labels is not None:
-                    landmark_labels = landmark_labels.to(self.device)
-                    
+                img_names = batch['img_name']  # 获取图像名称
+
+                # 获取分割任务的标签
                 seg_labels = batch.get('segmentation')
                 if seg_labels is not None:
                     seg_labels = seg_labels.to(self.device)
-                    
+
                 # 前向传播
-                outputs = eval_model(images)
-                
+                outputs = eval_model(images, img_names)  # 传递图像名称
+
                 # 1. 属性分类评估
                 attr_preds = (outputs['attr_logits'] > 0.5).float()
                 attr_correct += (attr_preds == attr_labels).float().sum().item()
                 attr_total += attr_labels.numel()
-                
-                # 2. 关键点检测评估
-                if self.enable_landmarks and landmark_labels is not None:
-                    vis_mask = landmark_labels[:, :, 2] > 0
-                    if vis_mask.any():
-                        landmark_error += torch.norm(
-                            outputs['landmark_coords'][vis_mask] - landmark_labels[vis_mask, :2],
-                            dim=1
-                        ).mean().item()
-                        landmark_count += 1
-                        
-                # 3. 分割评估
+
+                # 2. 分割评估
                 if self.enable_segmentation and seg_labels is not None:
                     seg_preds = (outputs['seg_logits'] > 0).float()
                     intersection = (seg_preds * seg_labels).sum().item()
@@ -503,18 +493,16 @@ class DeepFashionTrainer:
                     if union > 0:
                         seg_iou += intersection / union
                         seg_count += 1
-                        
+
         # 计算各项指标
         attr_acc = attr_correct / attr_total if attr_total > 0 else 0
-        landmark_avg_error = landmark_error / landmark_count if landmark_count > 0 else 0
         seg_avg_iou = seg_iou / seg_count if seg_count > 0 else 0
-        
+
         return {
             'attr_acc': attr_acc,
-            'landmark_error': landmark_avg_error,
             'seg_iou': seg_avg_iou
         }
-        
+
     def train(self, epochs: int = 50, save_dir: str = "checkpoints"):
         """训练模型
         Args:
@@ -523,19 +511,19 @@ class DeepFashionTrainer:
         """
         # 创建保存目录
         os.makedirs(save_dir, exist_ok=True)
-        
+
         # 更新scheduler的epochs参数
         self.scheduler.total_steps = epochs * len(self.train_loader)
-        
+
         for epoch in range(epochs):
             self.current_epoch = epoch + 1
-            
+
             # 训练一个epoch
             train_metrics = self.train_epoch()
-            
+
             # 验证
             val_metrics = self.validate()
-            
+
             # 输出训练信息
             logger.info(f"\nEpoch {epoch + 1}/{epochs}")
             logger.info("训练指标:")
@@ -544,7 +532,7 @@ class DeepFashionTrainer:
             logger.info("\n验证指标:")
             for k, v in val_metrics.items():
                 logger.info(f"- {k}: {v:.4f}")
-                
+
             # 早停检查
             val_loss = -val_metrics['attr_acc']  # 使用属性准确率的负值作为验证损失
             if val_loss < self.best_val_loss:
@@ -556,7 +544,7 @@ class DeepFashionTrainer:
                 logger.info(f"保存最佳模型到: {model_path}")
             else:
                 self.patience_counter += 1
-                
+
             if self.patience_counter >= self.patience:
                 logger.info(f"在第 {epoch + 1} 轮提前停止训练")
                 break
@@ -569,10 +557,10 @@ class DeepFashionTrainer:
             'scheduler_state': self.scheduler.state_dict(),
             'best_val_loss': self.best_val_loss
         }
-        
+
         # 保存最新checkpoint
         torch.save(state, 'checkpoint_latest.pth')
-        
+
         # 如果是最佳模型,额外保存
         if is_best:
             torch.save(state, 'checkpoint_best.pth')
@@ -587,8 +575,8 @@ def get_transforms(train=True):
             transforms.ColorJitter(0.3, 0.3, 0.3),
             transforms.RandomRotation(10),
             transforms.ToTensor(),
-            transforms.Normalize([0.485, 0.456, 0.406], 
-                              [0.229, 0.224, 0.225])
+            transforms.Normalize([0.485, 0.456, 0.406],
+                                 [0.229, 0.224, 0.225])
         ])
     else:
         return transforms.Compose([
@@ -596,32 +584,28 @@ def get_transforms(train=True):
             transforms.CenterCrop(224),
             transforms.ToTensor(),
             transforms.Normalize([0.485, 0.456, 0.406],
-                              [0.229, 0.224, 0.225])
+                                 [0.229, 0.224, 0.225])
         ])
 
 
 # ---------------------- 数据加载工具函数 ----------------------
 def collate_fn(batch):
-    """处理批量数据的组合函数
-    
-    Args:
-        batch: 一批数据样本的列表
-        
-    Returns:
-        合并后的批量数据
-    """
+    """处理批量数据的组合函数"""
     # 过滤掉None（无效样本）
     batch = [b for b in batch if b is not None]
     if len(batch) == 0:
         return {}
-        
+
     # 组合所有样本
     output = {}
     for key in batch[0].keys():
-        if isinstance(batch[0][key], torch.Tensor):
+        if key == 'img_name':
+            output[key] = [b[key] for b in batch]
+        elif isinstance(batch[0][key], torch.Tensor):
             output[key] = torch.stack([b[key] for b in batch])
         else:
             output[key] = [b[key] for b in batch]
+
     return output
 
 
@@ -677,14 +661,10 @@ class KFoldTrainer:
             train_loader = create_safe_loader(
                 self.dataset,
                 batch_size=self.batch_size,
-                sampler=train_sampler,
-                shuffle=False
             )
             val_loader = create_safe_loader(
                 self.dataset,
                 batch_size=self.batch_size,
-                sampler=val_sampler,
-                shuffle=False
             )
 
             # 初始化新模型
@@ -929,22 +909,22 @@ if __name__ == "__main__":
     DEEPFASHION_ROOT = "deepfashion"
     CATEGORY_ROOT = os.path.join(DEEPFASHION_ROOT, "Category and Attribute Prediction Benchmark")
     ANNO_DIR = os.path.join(CATEGORY_ROOT, "Anno_fine")
-    IMG_DIR = os.path.join(CATEGORY_ROOT, "Img", "img")  # 修正图像根目录路径
-    
+    IMG_DIR = os.path.join(CATEGORY_ROOT, "Img", "img_highres/img_highres")  # 修正图像根目录路径
+
     # 训练集文件
     TRAIN_IMG_LIST = os.path.join(ANNO_DIR, "train.txt")
     TRAIN_ATTR_FILE = os.path.join(ANNO_DIR, "train_attr.txt")
     TRAIN_CATE_FILE = os.path.join(ANNO_DIR, "train_cate.txt")
     TRAIN_BBOX_FILE = os.path.join(ANNO_DIR, "train_bbox.txt")
     TRAIN_LANDMARK_FILE = os.path.join(ANNO_DIR, "train_landmark.txt")
-    
+
     # 验证集文件
     VAL_IMG_LIST = os.path.join(ANNO_DIR, "val.txt")
     VAL_ATTR_FILE = os.path.join(ANNO_DIR, "val_attr.txt")
     VAL_CATE_FILE = os.path.join(ANNO_DIR, "val_cate.txt")
     VAL_BBOX_FILE = os.path.join(ANNO_DIR, "val_bbox.txt")
     VAL_LANDMARK_FILE = os.path.join(ANNO_DIR, "val_landmark.txt")
-    
+
     # 2. 数据增强和预处理
     train_transform = transforms.Compose([
         transforms.Resize((256, 256)),
@@ -954,34 +934,34 @@ if __name__ == "__main__":
         transforms.ToTensor(),
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
     ])
-    
+
     val_transform = transforms.Compose([
         transforms.Resize((224, 224)),
         transforms.ToTensor(),
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
     ])
-    
+
     # 3. 创建数据集
     train_dataset = DeepFashionDataset(
         img_list_file=TRAIN_IMG_LIST,
         attr_file=TRAIN_ATTR_FILE,
         cate_file=TRAIN_CATE_FILE,
         bbox_file=TRAIN_BBOX_FILE,
-        landmark_file=TRAIN_LANDMARK_FILE,
+        seg_file=TRAIN_SEG_FILE,  # 添加分割标注文件
         image_dir=IMG_DIR,
         transform=train_transform
     )
-    
+
     val_dataset = DeepFashionDataset(
         img_list_file=VAL_IMG_LIST,
         attr_file=VAL_ATTR_FILE,
         cate_file=VAL_CATE_FILE,
         bbox_file=VAL_BBOX_FILE,
-        landmark_file=VAL_LANDMARK_FILE,
+        seg_file=VAL_SEG_FILE,  # 添加分割标注文件
         image_dir=IMG_DIR,
         transform=val_transform
     )
-    
+
     # 4. 创建数据加载器
     train_loader = DataLoader(
         train_dataset,
@@ -991,7 +971,7 @@ if __name__ == "__main__":
         pin_memory=True,
         collate_fn=collate_fn
     )
-    
+
     val_loader = DataLoader(
         val_dataset,
         batch_size=32,
@@ -1000,20 +980,19 @@ if __name__ == "__main__":
         pin_memory=True,
         collate_fn=collate_fn
     )
-    
+
     # 5. 创建模型和训练器
     model = FullModel(
         num_classes=26,  # DeepFashion数据集的属性数量
-        enable_landmarks=True
     )
-    
+
     trainer = DeepFashionTrainer(
         model=model,
         train_loader=train_loader,
         val_loader=val_loader,
-        enable_landmarks=True
+        enable_segmentation=True
     )
-    
+
     # 6. 开始训练
     trainer.train(epochs=50, save_dir="checkpoints")
 
