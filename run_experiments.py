@@ -1,4 +1,6 @@
 import torch
+import torch.nn as nn
+import torchvision.models as models
 import logging
 from experiment_config import EXPERIMENT_CONFIG, validate_dataset_structure
 from experiment_runner import ExperimentRunner
@@ -19,51 +21,79 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-def create_models():
-    """创建所有对比模型"""
-    models = {}
+class MultiLabelResNet(nn.Module):
+    def __init__(self, num_classes=26):
+        super().__init__()
+        self.model = models.resnet50(weights='IMAGENET1K_V1')
+        self.model.fc = nn.Linear(2048, num_classes)
     
-    # 1. 基准模型（仅使用CNN特征）
-    models['baseline'] = FullModel(
-        num_classes=26,
-        enable_segmentation=False,
-        gat_dims=[2048],  # 最简单的线性变换
-        gat_heads=1,
-        cnn_type='resnet50',
-        weights='IMAGENET1K_V1'
-    )
+    def forward(self, x):
+        return {'attr_logits': self.model(x)}
+
+class MultiLabelEfficientNet(nn.Module):
+    def __init__(self, num_classes=26):
+        super().__init__()
+        self.model = models.efficientnet_b0(weights=None)
+        state_dict = torch.load('checkpoints/efficientnet_b0_rwightman-3dd342df.pth')
+        self.model.load_state_dict(state_dict)
+        self.model.classifier[1] = nn.Linear(1280, num_classes)
     
-    # 2. CNN+Attention模型
-    models['cnn_attention'] = FullModel(
+    def forward(self, x):
+        return {'attr_logits': self.model(x)}
+
+class MultiLabelDenseNet(nn.Module):
+    def __init__(self, num_classes=26):
+        super().__init__()
+        self.model = models.densenet121(weights='IMAGENET1K_V1')
+        self.model.classifier = nn.Linear(1024, num_classes)
+    
+    def forward(self, x):
+        return {'attr_logits': self.model(x)}
+
+class MultiLabelSwinTransformer(nn.Module):
+    def __init__(self, num_classes=26):
+        super().__init__()
+        self.model = models.swin_t(weights=None)
+        state_dict = torch.load('checkpoints/swin_t-704ceda3.pth')
+        self.model.load_state_dict(state_dict)
+        self.model.head = nn.Linear(768, num_classes)
+    
+    def forward(self, x):
+        return {'attr_logits': self.model(x)}
+
+def load_pretrained_models():
+    """加载预训练模型"""
+    model_dict = {}
+    
+    # 1. 加载我们的最佳模型
+    our_model = FullModel(
         num_classes=26,
         enable_segmentation=False,
         gat_dims=[2048, 1024],
-        gat_heads=8,  # 使用多头注意力
+        gat_heads=8,
         cnn_type='resnet50',
         weights='IMAGENET1K_V1'
     )
+    our_model.load_state_dict(torch.load('checkpoints/best_model.pth'))
+    model_dict['our_model'] = our_model
     
-    # 3. 多尺度特征模型
-    models['multi_scale'] = FullModel(
-        num_classes=26,
-        enable_segmentation=False,
-        gat_dims=[2048, 1024],
-        gat_heads=4,
-        cnn_type='resnet50',
-        weights='IMAGENET1K_V1'
-    )
+    # 4. 加载预训练的ResNet50模型
+    resnet_model = MultiLabelResNet(num_classes=26)
+    model_dict['resnet50'] = resnet_model
     
-    # 4. GAT模型（完整版）
-    models['gat'] = FullModel(
-        num_classes=26,
-        enable_segmentation=False,
-        gat_dims=[2048, 1024, 512],
-        gat_heads=4,
-        cnn_type='resnet50',
-        weights='IMAGENET1K_V1'
-    )
+    # 5. 加载预训练的EfficientNet模型
+    efficient_model = MultiLabelEfficientNet(num_classes=26)
+    model_dict['efficientnet'] = efficient_model
     
-    return models
+    # 6. 加载预训练的DenseNet模型
+    densenet_model = MultiLabelDenseNet(num_classes=26)
+    model_dict['densenet'] = densenet_model
+    
+    # 7. 加载预训练的Swin Transformer模型
+    swin_model = MultiLabelSwinTransformer(num_classes=26)
+    model_dict['swin_transformer'] = swin_model
+    
+    return model_dict
 
 def plot_results(results, save_dir='results'):
     """绘制实验结果"""
@@ -91,30 +121,18 @@ def plot_results(results, save_dir='results'):
     
     # 2. 训练曲线（如果有训练历史）
     for model_name, model_results in results.items():
-        # 检查是否有训练历史数据
-        if isinstance(model_results, dict):
-            # 处理不同的数据结构
-            if 'train' in model_results and 'val' in model_results:
-                # 原始数据结构
-                train_data = model_results['train']
-                val_data = model_results['val']
-            else:
-                # 新的数据结构
-                train_data = model_results.get('history', {}).get('train', [])
-                val_data = model_results.get('history', {}).get('val', [])
-            
-            if train_data or val_data:
+        if isinstance(model_results, dict) and 'history' in model_results:
+            history = model_results['history']
+            if 'train' in history and 'val' in history:
                 plt.figure(figsize=(12, 6))
                 
-                if train_data:
-                    train_df = pd.DataFrame(train_data)
-                    if 'epoch' in train_df and 'loss' in train_df:
-                        plt.plot(train_df['epoch'], train_df['loss'], label='Train Loss')
+                train_data = pd.DataFrame(history['train'])
+                val_data = pd.DataFrame(history['val'])
                 
-                if val_data:
-                    val_df = pd.DataFrame(val_data)
-                    if 'epoch' in val_df and 'loss' in val_df:
-                        plt.plot(val_df['epoch'], val_df['loss'], label='Val Loss')
+                if 'epoch' in train_data and 'loss' in train_data:
+                    plt.plot(train_data['epoch'], train_data['loss'], label='Train Loss')
+                if 'epoch' in val_data and 'loss' in val_data:
+                    plt.plot(val_data['epoch'], val_data['loss'], label='Val Loss')
                 
                 plt.title(f'{model_name} Training Progress')
                 plt.xlabel('Epoch')
@@ -150,13 +168,13 @@ def main():
         logger.error(f"创建数据加载器时出错: {str(e)}")
         sys.exit(1)
     
-    # 创建模型
-    logger.info("创建模型...")
+    # 加载预训练模型
+    logger.info("加载预训练模型...")
     try:
-        models = create_models()
-        logger.info(f"创建了 {len(models)} 个模型用于比较")
+        models = load_pretrained_models()
+        logger.info(f"加载了 {len(models)} 个预训练模型用于比较")
     except Exception as e:
-        logger.error(f"创建模型时出错: {str(e)}")
+        logger.error(f"加载预训练模型时出错: {str(e)}")
         sys.exit(1)
     
     # 创建实验运行器

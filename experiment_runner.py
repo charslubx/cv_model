@@ -76,63 +76,41 @@ class ExperimentRunner:
         
         return metrics
     
+    def evaluate_model(self, model, model_name):
+        """评估预训练模型"""
+        model = model.to(self.device)
+        model.eval()
+        criterion = nn.BCEWithLogitsLoss()
+        
+        # 在验证集上评估
+        val_metrics = self.validate(model, criterion, model_name)
+        
+        # 记录结果
+        results = {
+            'best_f1': val_metrics['f1'],
+            'metrics': val_metrics,
+            'history': {
+                'val': [{'epoch': 0, 'loss': val_metrics['loss'], 'f1': val_metrics['f1']}]
+            }
+        }
+        
+        return results
+    
     def run_experiment(self):
         """运行完整实验"""
         results = {}
-        
+
         for model_name, model in self.models.items():
-            logging.info(f"\n开始训练模型: {model_name}")
-            model = model.to(self.device)
-            
-            # 优化器和损失函数
-            optimizer = torch.optim.AdamW(
-                model.parameters(),
-                lr=self.config['training']['learning_rate'],
-                weight_decay=self.config['training']['weight_decay']
-            )
-            criterion = nn.BCEWithLogitsLoss()
-            
-            # 学习率调度器
-            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-                optimizer,
-                mode='max',
-                patience=self.config['training']['scheduler_patience'],
-                factor=0.1
-            )
-            
-            best_f1 = 0
-            patience_counter = 0
-            
-            for epoch in range(self.config['training']['epochs']):
-                # 训练
-                train_metrics = self.train_epoch(model, optimizer, criterion, model_name, epoch)
-                self.logger.log_metrics(model_name, 'train', epoch, train_metrics)
-                
-                # 验证
-                val_metrics = self.validate(model, criterion, model_name)
-                self.logger.log_metrics(model_name, 'val', epoch, val_metrics)
-                
-                # 更新学习率
-                scheduler.step(val_metrics['f1'])
-                
-                # 早停检查
-                if val_metrics['f1'] > best_f1:
-                    best_f1 = val_metrics['f1']
-                    patience_counter = 0
-                    # 保存最佳模型
-                    torch.save(model.state_dict(), f'checkpoints/{model_name}_best.pth')
-                else:
-                    patience_counter += 1
-                    if patience_counter >= self.config['training']['early_stopping_patience']:
-                        logging.info(f"Early stopping triggered for {model_name}")
-                        break
-                
-                logging.info(f"\nEpoch {epoch + 1}/{self.config['training']['epochs']}")
-                logging.info(f"Train Metrics: {train_metrics}")
-                logging.info(f"Val Metrics: {val_metrics}")
-            
-            results[model_name] = {'best_f1': best_f1}
-        
+            logging.info(f"\n开始评估模型: {model_name}")
+
+            # 直接评估预训练模型
+            model_results = self.evaluate_model(model, model_name)
+            results[model_name] = model_results
+
+            logging.info(f"模型 {model_name} 评估结果:")
+            logging.info(f"F1 Score: {model_results['best_f1']:.4f}")
+            logging.info(f"其他指标: {model_results['metrics']}")
+
         # 保存实验结果
         self.logger.save_results('results')
         return results

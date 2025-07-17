@@ -9,7 +9,7 @@ from datetime import datetime
 import json
 import time
 import numpy as np
-from sklearn.metrics import precision_score, recall_score, f1_score, confusion_matrix
+from sklearn.metrics import precision_score, recall_score, f1_score, confusion_matrix, accuracy_score, precision_recall_curve, average_precision_score
 from collections import defaultdict
 from itertools import combinations
 import torch.nn.functional as F
@@ -46,7 +46,8 @@ class SingleScaleModel(nn.Module):
         features = self.feature_extractor(x)
         final_features = features['final']  # [B, 2048, H, W]
         logits = self.classifier(final_features)  # [B, num_classes]
-        return logits
+        # 修改返回格式以匹配FullModel
+        return {'attr_logits': logits}
 
 class FeatureAttention(nn.Module):
     """特征注意力模块"""
@@ -189,113 +190,137 @@ class AblationModel(nn.Module):
         # 确保输出格式一致
         return {'attr_logits': logits}
 
-def evaluate_model(model, data_loader, device, attr_names):
-    """全面评估模型性能"""
+def calculate_map(predictions, targets, num_classes):
+    """计算mAP (mean Average Precision)"""
+    aps = []
+    for i in range(num_classes):
+        # 获取当前类别的预测和真实标签
+        pred = predictions[:, i]
+        target = targets[:, i]
+        
+        # 计算precision和recall
+        precision, recall, _ = precision_recall_curve(target, pred)
+        
+        # 计算AP
+        ap = average_precision_score(target, pred)
+        aps.append(ap)
+    
+    # 计算mAP
+    return np.mean(aps)
+
+def measure_inference_time(model, data_loader, device, num_runs=100):
+    """测量模型推理时间
+    
+    Args:
+        model: 要评估的模型
+        data_loader: 数据加载器
+        device: 运行设备
+        num_runs: 运行次数，用于计算平均时间
+        
+    Returns:
+        float: 平均推理时间（毫秒）
+    """
     model.eval()
-    all_predictions = []
-    all_labels = []
     total_time = 0
     num_samples = 0
-    per_attr_correct = defaultdict(int)
-    per_attr_total = defaultdict(int)
     
+    # 预热
     with torch.no_grad():
         for batch in data_loader:
             images = batch['image'].to(device)
-            labels = batch['attr_labels'].to(device)
+            _ = model(images)
+            break
+    
+    # 测量推理时间
+    with torch.no_grad():
+        for i, batch in enumerate(data_loader):
+            if i >= num_runs:
+                break
+                
+            images = batch['image'].to(device)
             
-            # 测量推理时间
+            # 同步GPU
+            if device == 'cuda':
+                torch.cuda.synchronize()
+            
+            # 开始计时
             start_time = time.time()
-            outputs = model(images)
+            
+            # 前向传播
+            _ = model(images)
+            
+            # 同步GPU
+            if device == 'cuda':
+                torch.cuda.synchronize()
+            
+            # 结束计时
             end_time = time.time()
-            total_time += (end_time - start_time)
             
-            # 处理不同类型的模型输出
-            if isinstance(outputs, dict):
-                logits = outputs['attr_logits']
-            elif isinstance(outputs, torch.Tensor):
-                logits = outputs
-            else:
-                raise ValueError(f"不支持的模型输出类型: {type(outputs)}")
-            
-            # 使用sigmoid获取预测概率
-            probs = torch.sigmoid(logits)
-            predictions = (probs > 0.5).float()
-            
-            # 收集预测和标签
-            all_predictions.append(predictions.cpu().numpy())
-            all_labels.append(labels.cpu().numpy())
-            
-            # 统计每个属性的正确预测数
-            for i, attr_name in enumerate(attr_names):
-                correct = (predictions[:, i] == labels[:, i]).sum().item()
-                total = labels.size(0)
-                per_attr_correct[attr_name] += correct
-                per_attr_total[attr_name] += total
-            
+            # 累加时间
+            total_time += (end_time - start_time) * 1000  # 转换为毫秒
             num_samples += images.size(0)
     
-    # 合并所有预测和标签
-    all_predictions = np.concatenate(all_predictions, axis=0)
-    all_labels = np.concatenate(all_labels, axis=0)
+    # 计算平均时间
+    avg_time = total_time / num_runs
+    return avg_time
+
+def evaluate_model(model, val_loader, device, attr_names):
+    """评估模型性能"""
+    model.eval()
+    all_preds = []
+    all_labels = []
     
-    # 计算每个属性的指标
-    per_attr_metrics = {}
-    overall_precision = []
-    overall_recall = []
-    overall_f1 = []
+    with torch.no_grad():
+        for batch in val_loader:
+            images = batch['image'].to(device)
+            attr_labels = batch['attr_labels'].to(device)
+            
+            # 前向传播
+            outputs = model(images)
+            # 确保我们正确处理模型输出
+            if isinstance(outputs, dict):
+                attr_logits = outputs['attr_logits']
+            else:
+                attr_logits = outputs
+            
+            # 收集预测和标签
+            all_preds.append(attr_logits.cpu())
+            all_labels.append(attr_labels.cpu())
     
-    for i, attr_name in enumerate(attr_names):
-        attr_pred = all_predictions[:, i]
-        attr_true = all_labels[:, i]
-        
-        # 计算该属性的指标
-        precision = precision_score(attr_true, attr_pred, zero_division=0)
-        recall = recall_score(attr_true, attr_pred, zero_division=0)
-        f1 = f1_score(attr_true, attr_pred, zero_division=0)
-        
-        per_attr_metrics[attr_name] = {
-            'precision': precision,
-            'recall': recall,
-            'f1': f1
-        }
-        
-        overall_precision.append(precision)
-        overall_recall.append(recall)
-        overall_f1.append(f1)
+    # 合并所有批次的结果
+    all_preds = torch.cat(all_preds, dim=0)
+    all_labels = torch.cat(all_labels, dim=0)
     
-    # 计算总体指标
-    accuracy = np.mean(all_predictions == all_labels)
-    avg_precision = np.mean(overall_precision)
-    avg_recall = np.mean(overall_recall)
-    avg_f1 = np.mean(overall_f1)
+    # 计算各项指标
+    predictions = torch.sigmoid(all_preds).numpy()
+    targets = all_labels.numpy()
+    
+    # 计算mAP
+    mAP = calculate_map(predictions, targets, len(attr_names))
+    
+    # 计算其他指标
+    binary_preds = (predictions > 0.5).astype(float)
+    accuracy = accuracy_score(targets.flatten(), binary_preds.flatten())
+    precision = precision_score(targets.flatten(), binary_preds.flatten(), average='macro')
+    recall = recall_score(targets.flatten(), binary_preds.flatten(), average='macro')
+    f1 = f1_score(targets.flatten(), binary_preds.flatten(), average='macro')
     
     # 计算每个属性的准确率
-    per_attr_accuracy = {
-        attr: correct/total 
-        for attr, (correct, total) in zip(
-            attr_names, 
-            zip(per_attr_correct.values(), per_attr_total.values())
-        )
-    }
-    
-    # 计算混淆矩阵
-    conf_matrices = {}
+    per_attr_accuracy = {}
     for i, attr_name in enumerate(attr_names):
-        conf_matrices[attr_name] = confusion_matrix(
-            all_labels[:, i],
-            all_predictions[:, i]
-        ).tolist()
+        per_attr_accuracy[attr_name] = accuracy_score(targets[:, i], binary_preds[:, i])
+    
+    # 计算推理时间
+    inference_time = measure_inference_time(model, val_loader, device)
     
     return {
         'accuracy': accuracy,
-        'precision': avg_precision,
-        'recall': avg_recall,
-        'f1_score': avg_f1,
-        'inference_time': total_time / num_samples,
-        'per_attr_accuracy': per_attr_accuracy,
-        'per_attr_metrics': per_attr_metrics,
-        'confusion_matrices': conf_matrices
+        'precision': precision,
+        'recall': recall,
+        'f1_score': f1,
+        'mAP': mAP,
+        'inference_time': inference_time,
+        'per_attr_accuracy': per_attr_accuracy
     }
 
 def run_ablation_experiments(
@@ -468,8 +493,15 @@ def run_scale_comparison_experiment(
     # 获取属性名称
     attr_names = train_dataset.get_attr_names()
     
-    # 创建模型
-    multi_scale_model = FullModel()
+    # 创建模型 - 使用与训练时相同的配置
+    multi_scale_model = FullModel(
+        num_classes=26,
+        enable_segmentation=False,
+        gat_dims=[2048, 1024],
+        gat_heads=8,
+        cnn_type='resnet50',
+        weights='IMAGENET1K_V1'
+    )
     single_scale_model = SingleScaleModel()
     
     # 检查模型文件

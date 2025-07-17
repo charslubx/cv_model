@@ -983,7 +983,12 @@ if __name__ == "__main__":
 
     # 5. 创建模型和训练器
     model = FullModel(
-        num_classes=26,  # DeepFashion数据集的属性数量
+        num_classes=26,
+        enable_segmentation=False,
+        gat_dims=[2048, 1024],
+        gat_heads=8,
+        cnn_type='resnet50',
+        weights='IMAGENET1K_V1'
     )
 
     trainer = DeepFashionTrainer(

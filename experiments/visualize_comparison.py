@@ -140,36 +140,64 @@ def create_metrics_comparison_plot(results, save_dir):
     
     # 提取数据
     model_names = list(results.keys())
-    metrics = ['accuracy', 'f1_score', 'inference_time']
     
-    # 创建DataFrame
-    data = []
+    # 1. 性能指标对比图
+    performance_metrics = ['accuracy', 'precision', 'recall', 'f1_score', 'mAP']
+    
+    # 创建性能指标DataFrame
+    perf_data = []
     for model in model_names:
-        for metric in metrics:
+        for metric in performance_metrics:
             value = results[model][metric]
-            data.append({
+            perf_data.append({
                 'Model': model,
                 'Metric': metric_names[metric],
                 'Value': value
             })
-    df = pd.DataFrame(data)
+    perf_df = pd.DataFrame(perf_data)
     
-    # 创建图形
+    # 创建性能指标对比图
     plt.figure(figsize=(12, 6))
-    ax = sns.barplot(data=df, x='Model', y='Value', hue='Metric', palette='Set2')
+    ax = sns.barplot(data=perf_df, x='Model', y='Value', hue='Metric', palette='Set2')
     
     titles = get_title_mapping(use_chinese)
     plt.title(titles['performance_comparison'])
-    plt.ylabel('Score / Time (ms)')
+    plt.ylabel('Score')
+    plt.xticks(rotation=45, ha='right')
+    plt.grid(True, axis='y', linestyle='--', alpha=0.3)
+    
+    # 将图例移到图表内部右侧
+    plt.legend(bbox_to_anchor=(0.98, 0.98), loc='upper right')
+    
+    plt.tight_layout()
+    perf_path = os.path.join(save_dir, 'performance_metrics.png')
+    plt.savefig(perf_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    # 2. 推理时间对比图
+    time_data = []
+    for model in model_names:
+        time_data.append({
+            'Model': model,
+            'Time': results[model]['inference_time']
+        })
+    time_df = pd.DataFrame(time_data)
+    
+    # 创建推理时间对比图
+    plt.figure(figsize=(10, 6))
+    ax = sns.barplot(data=time_df, x='Model', y='Time', color='salmon')
+    
+    plt.title(titles['inference_time_comparison'])
+    plt.ylabel('Time (ms)')
     plt.xticks(rotation=45, ha='right')
     plt.grid(True, axis='y', linestyle='--', alpha=0.3)
     
     plt.tight_layout()
-    save_path = os.path.join(save_dir, 'metrics_comparison.png')
-    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    time_path = os.path.join(save_dir, 'inference_time.png')
+    plt.savefig(time_path, dpi=300, bbox_inches='tight')
     plt.close()
     
-    return save_path
+    return perf_path, time_path
 
 def create_pr_curves_plot(results, save_dir):
     """创建PR曲线图"""
@@ -338,6 +366,24 @@ def filter_combinations(results):
     
     return filtered_results
 
+def calculate_map(predictions, targets, num_classes):
+    """计算mAP (mean Average Precision)"""
+    aps = []
+    for i in range(num_classes):
+        # 获取当前类别的预测和真实标签
+        pred = predictions[:, i]
+        target = targets[:, i]
+        
+        # 计算precision和recall
+        precision, recall, _ = precision_recall_curve(target, pred)
+        
+        # 计算AP
+        ap = average_precision_score(target, pred)
+        aps.append(ap)
+    
+    # 计算mAP
+    return np.mean(aps)
+
 def create_ablation_comparison_plot(results, save_dir):
     """创建消融实验比较图"""
     global use_chinese
@@ -350,7 +396,7 @@ def create_ablation_comparison_plot(results, save_dir):
     
     # 创建性能指标DataFrame
     data = []
-    metrics = ['accuracy', 'precision', 'recall', 'f1_score', 'inference_time']
+    metrics = ['accuracy', 'precision', 'recall', 'f1_score', 'mAP', 'inference_time']
     
     for model_name, result in filtered_results.items():
         # 提取层的名称
@@ -486,7 +532,7 @@ def visualize_comparison_results(results_file='experiments/results/comprehensive
     use_chinese = set_plot_style()
     
     # 创建可视化图表
-    metrics_plot_path = create_metrics_comparison_plot(results, vis_dir)
+    metrics_plot_path, time_plot_path = create_metrics_comparison_plot(results, vis_dir)
     ablation_plot_path, time_plot_path = create_ablation_comparison_plot(results, vis_dir)
     
     # 打印结果摘要
@@ -553,7 +599,7 @@ def save_ablation_table(results, save_dir, top_n=5):
     # 只保留单层、双层和最优两个多层组合
     filtered_results = filter_combinations(results)
     metric_names = get_metric_names(use_chinese)
-    metrics = ['accuracy', 'precision', 'recall', 'f1_score', 'inference_time']
+    metrics = ['accuracy', 'precision', 'recall', 'f1_score', 'mAP', 'inference_time']
     table_data = []
     for model_name, result in filtered_results.items():
         layers = model_name.replace('Ablation_', '').replace('_', '+')
