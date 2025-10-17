@@ -1,7 +1,7 @@
 # Pull Request信息
 
 ## PR标题
-添加FastAPI模型推理服务
+添加FastAPI服装属性多标签分类服务
 
 ## 目标分支
 service_main
@@ -12,7 +12,7 @@ cursor/set-up-fastapi-service-for-model-inference-4150
 ## PR描述
 
 ### 概述
-实现了基于FastAPI的服装属性识别推理服务，用于部署和运行训练好的模型。
+实现了基于FastAPI的服装属性多标签分类推理服务，用于部署和运行训练好的模型。服务支持图片上传、多标签分类、阈值调节等功能。
 
 ### 主要功能
 
@@ -99,15 +99,21 @@ python3 service/test_service.py
 - [x] 配置加载测试
 - [x] 文件结构检查
 - [x] Git提交验证
+- [x] 多标签分类逻辑验证
+- [x] 阈值参数功能验证
 - [ ] 实际服务启动测试（需要PyTorch环境）
 - [ ] API接口功能测试
-- [ ] 批量预测性能测试
+- [ ] 批量分类性能测试
+- [ ] 不同阈值下的精确率/召回率测试
 
 ### 注意事项
-- 服务使用预训练的ResNet50作为backbone
+- **模型类型**：多标签分类（Multi-Label Classification）
+- 服务使用ResNet50+GAT+GCN架构
 - 如果没有训练好的模型权重，会使用预训练权重初始化
 - 建议先训练模型并保存权重到 `checkpoints/best_model.pth`
 - 生产环境建议使用GPU加速
+- **阈值选择**：根据应用场景调节（0.5为平衡点）
+- **向后兼容**：保留所有原有字段，新增多个有用字段
 
 ### 相关链接
 - 模型定义: `base_model.py`
