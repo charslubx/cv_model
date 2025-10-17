@@ -1,15 +1,24 @@
-# 服装属性识别服务
+# 服装属性多标签分类服务
 
-基于GAT+GCN的服装属性识别模型推理服务，使用FastAPI构建。
+基于GAT+GCN的服装属性多标签分类模型推理服务，使用FastAPI构建。
 
 ## 功能特性
 
-- ✅ 单张图片预测
-- ✅ 批量图片预测
-- ✅ 支持26个服装属性识别
+- ✅ 单张图片多标签分类
+- ✅ 批量图片分类
+- ✅ 支持26个服装属性的多标签分类
+- ✅ 可调节分类阈值
 - ✅ RESTful API接口
 - ✅ 异步处理
 - ✅ CORS支持
+
+## 关于多标签分类
+
+本模型执行的是**多标签分类**任务，即一张图片可以同时具有多个属性。例如，一件衣服可以同时是"黑色"、"纯色"、"棉质"等。
+
+- **输入**：服装图片
+- **输出**：26个属性的分类结果（每个属性0或1）和置信度（0-1之间的概率值）
+- **阈值**：默认使用0.5作为分类阈值，置信度≥0.5的属性被分类为1（正类），否则为0（负类）
 
 ## 环境要求
 
@@ -78,11 +87,15 @@ curl http://localhost:8000/health
 }
 ```
 
-### 2. 单张图片预测
+### 2. 单张图片分类
 
 ```bash
+# 使用默认阈值0.5
 curl -X POST "http://localhost:8000/predict" \
-  -H "Content-Type: multipart/form-data" \
+  -F "file=@/path/to/image.jpg"
+
+# 指定自定义阈值
+curl -X POST "http://localhost:8000/predict?threshold=0.6" \
   -F "file=@/path/to/image.jpg"
 ```
 
@@ -98,20 +111,41 @@ curl -X POST "http://localhost:8000/predict" \
       "pattern_solid": 0.89,
       ...
     },
-    "top_k_attributes": [
+    "classifications": {
+      "black": 1,
+      "blue": 0,
+      "pattern_solid": 1,
+      ...
+    },
+    "positive_attributes": [
       {"attribute": "black", "confidence": 0.95},
       {"attribute": "pattern_solid", "confidence": 0.89},
       ...
-    ]
+    ],
+    "top_k_attributes": [
+      {"attribute": "black", "confidence": 0.95, "classification": 1},
+      {"attribute": "pattern_solid", "confidence": 0.89, "classification": 1},
+      ...
+    ],
+    "statistics": {
+      "total_attributes": 26,
+      "positive_count": 5,
+      "threshold": 0.5
+    }
   }
 }
 ```
 
-### 3. 批量图片预测
+### 3. 批量图片分类
 
 ```bash
+# 使用默认阈值
 curl -X POST "http://localhost:8000/predict_batch" \
-  -H "Content-Type: multipart/form-data" \
+  -F "files=@/path/to/image1.jpg" \
+  -F "files=@/path/to/image2.jpg"
+
+# 指定自定义阈值
+curl -X POST "http://localhost:8000/predict_batch?threshold=0.6" \
   -F "files=@/path/to/image1.jpg" \
   -F "files=@/path/to/image2.jpg"
 ```

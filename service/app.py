@@ -34,8 +34,8 @@ settings = Settings()
 
 # 创建FastAPI应用
 app = FastAPI(
-    title="服装属性识别服务",
-    description="基于GAT+GCN的服装属性识别模型推理服务",
+    title="服装属性多标签分类服务",
+    description="基于GAT+GCN的服装属性多标签分类模型推理服务",
     version="1.0.0"
 )
 
@@ -95,15 +95,24 @@ async def health_check():
 
 
 @app.post("/predict")
-async def predict(file: UploadFile = File(...)):
+async def predict(
+    file: UploadFile = File(...),
+    threshold: float = 0.5
+):
     """
-    图片预测接口
+    图片多标签分类接口
     
     Args:
         file: 上传的图片文件
+        threshold: 分类阈值（0-1之间），默认0.5
         
     Returns:
-        预测结果，包含各属性的置信度
+        分类结果，包含：
+        - attributes: 所有属性的置信度
+        - classifications: 所有属性的分类结果（0或1）
+        - positive_attributes: 预测为正的属性列表
+        - top_k_attributes: Top-K置信度最高的属性
+        - statistics: 统计信息
     """
     if model_inference is None:
         raise HTTPException(status_code=503, detail="模型未加载")
@@ -112,14 +121,18 @@ async def predict(file: UploadFile = File(...)):
     if not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="请上传图片文件")
     
+    # 验证阈值范围
+    if not 0 <= threshold <= 1:
+        raise HTTPException(status_code=400, detail="阈值必须在0-1之间")
+    
     try:
         # 读取图片
         contents = await file.read()
         image = Image.open(io.BytesIO(contents)).convert("RGB")
         
-        # 进行预测
-        logger.info(f"正在预测图片: {file.filename}")
-        predictions = model_inference.predict(image)
+        # 进行分类
+        logger.info(f"正在分类图片: {file.filename}, 阈值: {threshold}")
+        predictions = model_inference.predict(image, threshold=threshold)
         
         return JSONResponse(content={
             "success": True,
@@ -128,20 +141,24 @@ async def predict(file: UploadFile = File(...)):
         })
         
     except Exception as e:
-        logger.error(f"预测失败: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"预测失败: {str(e)}")
+        logger.error(f"分类失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"分类失败: {str(e)}")
 
 
 @app.post("/predict_batch")
-async def predict_batch(files: List[UploadFile] = File(...)):
+async def predict_batch(
+    files: List[UploadFile] = File(...),
+    threshold: float = 0.5
+):
     """
-    批量图片预测接口
+    批量图片多标签分类接口
     
     Args:
         files: 上传的图片文件列表
+        threshold: 分类阈值（0-1之间），默认0.5
         
     Returns:
-        预测结果列表
+        分类结果列表
     """
     if model_inference is None:
         raise HTTPException(status_code=503, detail="模型未加载")
@@ -149,8 +166,12 @@ async def predict_batch(files: List[UploadFile] = File(...)):
     if len(files) > settings.MAX_BATCH_SIZE:
         raise HTTPException(
             status_code=400, 
-            detail=f"批量预测最多支持{settings.MAX_BATCH_SIZE}张图片"
+            detail=f"批量分类最多支持{settings.MAX_BATCH_SIZE}张图片"
         )
+    
+    # 验证阈值范围
+    if not 0 <= threshold <= 1:
+        raise HTTPException(status_code=400, detail="阈值必须在0-1之间")
     
     results = []
     
@@ -169,8 +190,8 @@ async def predict_batch(files: List[UploadFile] = File(...)):
             contents = await file.read()
             image = Image.open(io.BytesIO(contents)).convert("RGB")
             
-            # 进行预测
-            predictions = model_inference.predict(image)
+            # 进行分类
+            predictions = model_inference.predict(image, threshold=threshold)
             
             results.append({
                 "filename": file.filename,
@@ -179,7 +200,7 @@ async def predict_batch(files: List[UploadFile] = File(...)):
             })
             
         except Exception as e:
-            logger.error(f"预测失败 ({file.filename}): {str(e)}")
+            logger.error(f"分类失败 ({file.filename}): {str(e)}")
             results.append({
                 "filename": file.filename,
                 "success": False,

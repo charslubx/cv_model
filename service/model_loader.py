@@ -127,15 +127,24 @@ class ModelInference:
         return img_tensor
     
     @torch.no_grad()
-    def predict(self, image: Union[Image.Image, torch.Tensor]) -> Dict:
+    def predict(
+        self, 
+        image: Union[Image.Image, torch.Tensor],
+        threshold: float = 0.5
+    ) -> Dict:
         """
-        单张图片预测
+        单张图片分类（多标签分类）
         
         Args:
             image: PIL图片或张量
+            threshold: 分类阈值，默认0.5
             
         Returns:
-            预测结果字典
+            分类结果字典，包含：
+            - attributes: 所有属性的置信度
+            - classifications: 所有属性的分类结果（0或1）
+            - positive_attributes: 预测为正的属性列表
+            - top_k_attributes: Top-K置信度最高的属性
         """
         # 预处理图片
         if isinstance(image, Image.Image):
@@ -150,47 +159,83 @@ class ModelInference:
         try:
             outputs = self.model(img_tensor)
             
-            # 获取属性预测logits
+            # 获取属性分类logits
             attr_logits = outputs['attr_logits']
             
-            # 应用sigmoid获取概率
+            # 应用sigmoid获取概率（多标签分类）
             attr_probs = torch.sigmoid(attr_logits).cpu().numpy()[0]
+            
+            # 使用阈值进行二值化分类
+            attr_classes = (attr_probs >= threshold).astype(int)
             
             # 构建结果字典
             predictions = {
-                "attributes": {},
-                "top_k_attributes": []
+                "attributes": {},           # 置信度
+                "classifications": {},       # 分类结果（0或1）
+                "positive_attributes": [],   # 预测为正的属性
+                "top_k_attributes": []       # Top-K属性
             }
             
-            # 添加所有属性的置信度
-            for attr_name, prob in zip(self.attribute_names, attr_probs):
+            # 添加所有属性的置信度和分类结果
+            for attr_name, prob, cls in zip(
+                self.attribute_names, 
+                attr_probs, 
+                attr_classes
+            ):
                 predictions["attributes"][attr_name] = float(prob)
+                predictions["classifications"][attr_name] = int(cls)
+                
+                # 收集预测为正的属性
+                if cls == 1:
+                    predictions["positive_attributes"].append({
+                        "attribute": attr_name,
+                        "confidence": float(prob)
+                    })
             
-            # 获取Top-K属性
+            # 按置信度排序正属性
+            predictions["positive_attributes"].sort(
+                key=lambda x: x["confidence"],
+                reverse=True
+            )
+            
+            # 获取Top-K置信度最高的属性
             top_k = 5
             top_indices = attr_probs.argsort()[-top_k:][::-1]
             for idx in top_indices:
                 predictions["top_k_attributes"].append({
                     "attribute": self.attribute_names[idx],
-                    "confidence": float(attr_probs[idx])
+                    "confidence": float(attr_probs[idx]),
+                    "classification": int(attr_classes[idx])
                 })
+            
+            # 添加统计信息
+            predictions["statistics"] = {
+                "total_attributes": len(self.attribute_names),
+                "positive_count": int(attr_classes.sum()),
+                "threshold": threshold
+            }
             
             return predictions
             
         except Exception as e:
-            logger.error(f"预测过程出错: {str(e)}")
+            logger.error(f"分类过程出错: {str(e)}")
             raise
     
     @torch.no_grad()
-    def predict_batch(self, images: List[Image.Image]) -> List[Dict]:
+    def predict_batch(
+        self,
+        images: List[Image.Image],
+        threshold: float = 0.5
+    ) -> List[Dict]:
         """
-        批量图片预测
+        批量图片分类（多标签分类）
         
         Args:
             images: PIL图片列表
+            threshold: 分类阈值，默认0.5
             
         Returns:
-            预测结果列表
+            分类结果列表
         """
         # 预处理所有图片
         img_tensors = [self.preprocess_image(img) for img in images]
@@ -202,17 +247,40 @@ class ModelInference:
             attr_logits = outputs['attr_logits']
             attr_probs = torch.sigmoid(attr_logits).cpu().numpy()
             
+            # 使用阈值进行二值化分类
+            attr_classes = (attr_probs >= threshold).astype(int)
+            
             # 构建结果列表
             results = []
-            for probs in attr_probs:
+            for probs, classes in zip(attr_probs, attr_classes):
                 predictions = {
                     "attributes": {},
+                    "classifications": {},
+                    "positive_attributes": [],
                     "top_k_attributes": []
                 }
                 
-                # 添加所有属性的置信度
-                for attr_name, prob in zip(self.attribute_names, probs):
+                # 添加所有属性的置信度和分类结果
+                for attr_name, prob, cls in zip(
+                    self.attribute_names,
+                    probs,
+                    classes
+                ):
                     predictions["attributes"][attr_name] = float(prob)
+                    predictions["classifications"][attr_name] = int(cls)
+                    
+                    # 收集预测为正的属性
+                    if cls == 1:
+                        predictions["positive_attributes"].append({
+                            "attribute": attr_name,
+                            "confidence": float(prob)
+                        })
+                
+                # 按置信度排序正属性
+                predictions["positive_attributes"].sort(
+                    key=lambda x: x["confidence"],
+                    reverse=True
+                )
                 
                 # 获取Top-K属性
                 top_k = 5
@@ -220,15 +288,23 @@ class ModelInference:
                 for idx in top_indices:
                     predictions["top_k_attributes"].append({
                         "attribute": self.attribute_names[idx],
-                        "confidence": float(probs[idx])
+                        "confidence": float(probs[idx]),
+                        "classification": int(classes[idx])
                     })
+                
+                # 添加统计信息
+                predictions["statistics"] = {
+                    "total_attributes": len(self.attribute_names),
+                    "positive_count": int(classes.sum()),
+                    "threshold": threshold
+                }
                 
                 results.append(predictions)
             
             return results
             
         except Exception as e:
-            logger.error(f"批量预测过程出错: {str(e)}")
+            logger.error(f"批量分类过程出错: {str(e)}")
             raise
     
     def get_attribute_names(self) -> List[str]:
