@@ -1,0 +1,11 @@
+# FastAPI服务依赖
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+python-multipart==0.0.6
+
+# 基础依赖（继承主项目）
+torch==2.4.1
+torchvision==0.19.1
+torch-geometric==2.6.1
+pillow==10.4.0
+numpy==1.24.3
