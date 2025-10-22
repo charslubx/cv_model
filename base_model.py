@@ -515,12 +515,18 @@ class FullModel(nn.Module):
                  cnn_type: str = 'resnet50',
                  weights: str = 'IMAGENET1K_V1',
                  enable_segmentation: bool = True,
+                 enable_textile_classification: bool = True,
+                 num_fabric_classes: int = 20,  # fabric类别数
+                 num_fiber_classes: int = 32,   # fiber类别数
                  gat_dims: list = [1024, 512],
                  gat_heads: int = 4,
                  gat_dropout: float = 0.2):
         super().__init__()
         self.num_classes = num_classes
         self.enable_segmentation = enable_segmentation
+        self.enable_textile_classification = enable_textile_classification
+        self.num_fabric_classes = num_fabric_classes
+        self.num_fiber_classes = num_fiber_classes
 
         # 特征提取器 - 增强特征提取能力
         self.feature_extractor = MultiScaleFeatureExtractor(
@@ -596,6 +602,47 @@ class FullModel(nn.Module):
             nn.Linear(256, num_classes),
             nn.Sigmoid()
         )
+        
+        # 纹理分类头（如果启用）
+        if enable_textile_classification:
+            # Fabric分类头
+            self.fabric_head = nn.Sequential(
+                nn.Linear(2048, 512),
+                nn.BatchNorm1d(512),
+                nn.ReLU(),
+                nn.Dropout(0.3),
+                nn.Linear(512, 256),
+                nn.BatchNorm1d(256),
+                nn.ReLU(),
+                nn.Dropout(0.3),
+                nn.Linear(256, num_fabric_classes)
+            )
+            
+            # Fiber分类头
+            self.fiber_head = nn.Sequential(
+                nn.Linear(2048, 512),
+                nn.BatchNorm1d(512),
+                nn.ReLU(),
+                nn.Dropout(0.3),
+                nn.Linear(512, 256),
+                nn.BatchNorm1d(256),
+                nn.ReLU(),
+                nn.Dropout(0.3),
+                nn.Linear(256, num_fiber_classes)
+            )
+            
+            # 统一纹理分类头（用于混合分类）
+            self.textile_head = nn.Sequential(
+                nn.Linear(2048, 512),
+                nn.BatchNorm1d(512),
+                nn.ReLU(),
+                nn.Dropout(0.3),
+                nn.Linear(512, 256),
+                nn.BatchNorm1d(256),
+                nn.ReLU(),
+                nn.Dropout(0.3),
+                nn.Linear(256, max(num_fabric_classes, num_fiber_classes))
+            )
 
     def forward(self, images, img_names=None):
         """前向传播"""
@@ -677,6 +724,23 @@ class FullModel(nn.Module):
             # 限制分割logits范围
             seg_logits = torch.clamp(seg_logits, -10, 10)
             outputs['seg_logits'] = seg_logits
+
+        # 10. 纹理分类（如果启用）
+        if self.enable_textile_classification:
+            # 使用全局特征进行纹理分类
+            textile_features = global_features
+            
+            # Fabric分类
+            fabric_logits = self.fabric_head(textile_features)
+            outputs['fabric_logits'] = fabric_logits
+            
+            # Fiber分类
+            fiber_logits = self.fiber_head(textile_features)
+            outputs['fiber_logits'] = fiber_logits
+            
+            # 统一纹理分类（用于混合训练）
+            textile_logits = self.textile_head(textile_features)
+            outputs['textile_logits'] = textile_logits
 
         return outputs
 
@@ -911,9 +975,9 @@ if __name__ == "__main__":
             if current_f1 > best_f1:
                 best_f1 = current_f1
                 self.patience_counter = 0
-                # 保存最佳模型
+                # 保存最佳模型（完整模型）
                 model_path = os.path.join(save_dir, "best_model.pth")
-                torch.save(self.model.state_dict(), model_path)
+                torch.save(self.model, model_path)
                 logger.info(f"保存最佳模型到: {model_path}")
             else:
                 self.patience_counter += 1
