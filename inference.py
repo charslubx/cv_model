@@ -14,6 +14,14 @@ import os
 from typing import Union, List, Dict, Optional
 import logging
 
+# 导入数据集相关的定义和函数
+try:
+    from base_model import ATTR_DEFS, CATEGORY_DEFS, read_attr_cloth_file
+except ImportError:
+    ATTR_DEFS = None
+    CATEGORY_DEFS = None
+    logger.warning("无法从base_model导入属性定义，将使用手动指定的属性名称")
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -80,15 +88,25 @@ class FashionInferenceWrapper:
         logger.info(f"- 纹理分类: {'启用' if enable_textile_classification else '禁用'}")
     
     def _get_default_attr_names(self) -> List[str]:
-        """获取默认属性名称列表"""
-        return [
-            'black', 'white', 'more_colors', 'floral', 'graphic', 'striped',
-            'embroidered', 'pleated', 'solid', 'lattice', 'long_sleeve',
-            'short_sleeve', 'sleeveless', 'maxi_length', 'mini_length',
-            'no_dress', 'crew_neckline', 'v_neckline', 'square_neckline',
-            'no_neckline', 'denim', 'chiffon', 'cotton', 'leather',
-            'faux', 'knit'
-        ]
+        """获取默认属性名称列表（从数据集定义中读取）"""
+        # 优先从base_model中导入的全局变量ATTR_DEFS获取
+        if ATTR_DEFS is not None and len(ATTR_DEFS) > 0:
+            attr_names = [attr['name'] for attr in ATTR_DEFS]
+            logger.info(f"从ATTR_DEFS加载了 {len(attr_names)} 个属性")
+            return attr_names
+        
+        # 如果导入失败，尝试直接读取文件
+        default_attr_file = "/home/cv_model/deepfashion/Category and Attribute Prediction Benchmark/Anno_fine/list_attr_cloth.txt"
+        if os.path.exists(default_attr_file):
+            attr_names = load_attr_names_from_file(default_attr_file)
+            if attr_names:
+                logger.info(f"从文件 {default_attr_file} 加载了 {len(attr_names)} 个属性")
+                return attr_names
+        
+        # 如果都失败了，返回警告并使用空列表
+        logger.warning("无法自动加载属性名称，请手动指定 attr_names 参数！")
+        logger.warning("使用方法: wrapper = FashionInferenceWrapper(model=model, attr_names=your_attr_list)")
+        return []
     
     def load_image(self, image_path: str) -> torch.Tensor:
         """
@@ -420,11 +438,38 @@ def load_attr_names_from_file(file_path: str) -> List[str]:
             attr_names = []
             for line in lines[2:2 + num_attrs]:
                 parts = line.strip().split()
-                attr_name = parts[0]
-                attr_names.append(attr_name)
+                if len(parts) >= 1:
+                    attr_name = parts[0]
+                    attr_names.append(attr_name)
+            logger.info(f"成功从 {file_path} 加载了 {len(attr_names)} 个属性")
             return attr_names
     except Exception as e:
-        logger.error(f"读取属性定义文件失败: {str(e)}")
+        logger.error(f"读取属性定义文件失败 {file_path}: {str(e)}")
+        return []
+
+
+def get_attr_names_from_dataset(dataset_root: str = "/home/cv_model/deepfashion") -> List[str]:
+    """
+    从DeepFashion数据集根目录自动加载属性名称
+    
+    Args:
+        dataset_root: DeepFashion数据集根目录
+        
+    Returns:
+        属性名称列表
+    """
+    attr_file = os.path.join(
+        dataset_root,
+        "Category and Attribute Prediction Benchmark",
+        "Anno_fine",
+        "list_attr_cloth.txt"
+    )
+    
+    if os.path.exists(attr_file):
+        return load_attr_names_from_file(attr_file)
+    else:
+        logger.error(f"属性定义文件不存在: {attr_file}")
+        logger.error(f"请检查数据集路径或手动指定属性名称列表")
         return []
 
 

@@ -1,8 +1,15 @@
 """
 快速推理脚本 - 用于快速对图片进行推理
 使用方法：
+    # 基础用法（自动从数据集加载属性）
     python quick_inference.py --image path/to/image.jpg --model path/to/model.pth
-    python quick_inference.py --images path/to/images/ --model path/to/model.pth --batch
+    
+    # 指定属性文件
+    python quick_inference.py --image path/to/image.jpg --model path/to/model.pth \
+        --attr-file /path/to/list_attr_cloth.txt
+    
+    # 批量推理
+    python quick_inference.py --images path/to/images/ --model path/to/model.pth
 """
 
 import torch
@@ -88,11 +95,27 @@ def main():
     
     # 4. 加载属性名称
     attr_names = None
-    if args.attr_file and os.path.exists(args.attr_file):
-        attr_names = load_attr_names_from_file(args.attr_file)
-        logger.info(f"从文件加载了 {len(attr_names)} 个属性名称")
+    
+    if args.attr_file:
+        # 用户指定了属性文件
+        if os.path.exists(args.attr_file):
+            attr_names = load_attr_names_from_file(args.attr_file)
+            logger.info(f"从指定文件加载了 {len(attr_names)} 个属性名称")
+        else:
+            logger.error(f"指定的属性文件不存在: {args.attr_file}")
+            sys.exit(1)
     else:
-        logger.info("使用默认属性名称")
+        # 尝试自动加载
+        from inference import get_attr_names_from_dataset
+        
+        logger.info("未指定属性文件，尝试从数据集自动加载...")
+        attr_names = get_attr_names_from_dataset()
+        
+        if attr_names:
+            logger.info(f"成功自动加载了 {len(attr_names)} 个属性名称")
+        else:
+            logger.warning("自动加载失败，使用模型内部默认值")
+            logger.warning("建议使用 --attr-file 参数指定属性定义文件以获得准确的属性名称")
     
     # 5. 创建推理包装器
     wrapper = FashionInferenceWrapper(

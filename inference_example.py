@@ -30,15 +30,25 @@ def example_single_image_inference():
     model = torch.load(model_path, map_location='cpu')
     model.eval()
     
-    # 2. 准备属性名称（从文件加载或使用默认值）
-    attr_file = "/home/cv_model/deepfashion/Category and Attribute Prediction Benchmark/Anno_fine/list_attr_cloth.txt"
+    # 2. 从DeepFashion数据集加载属性名称（推荐方式）
+    from inference import get_attr_names_from_dataset
     
-    if os.path.exists(attr_file):
-        attr_names = load_attr_names_from_file(attr_file)
-        logger.info(f"从文件加载了 {len(attr_names)} 个属性名称")
-    else:
-        logger.warning("属性定义文件不存在，使用默认属性名称")
-        attr_names = None  # 使用默认值
+    # 方式1：自动从数据集根目录加载（推荐）
+    attr_names = get_attr_names_from_dataset("/home/cv_model/deepfashion")
+    
+    # 方式2：手动指定属性文件路径
+    # attr_file = "/home/cv_model/deepfashion/Category and Attribute Prediction Benchmark/Anno_fine/list_attr_cloth.txt"
+    # attr_names = load_attr_names_from_file(attr_file)
+    
+    # 方式3：如果数据集不可访问，传入None会自动尝试加载或警告
+    # attr_names = None
+    
+    if not attr_names:
+        logger.error("无法加载属性名称，请检查数据集路径或手动提供属性列表")
+        return
+    
+    logger.info(f"成功加载 {len(attr_names)} 个属性名称")
+    logger.info(f"属性列表: {attr_names[:5]}... (显示前5个)")
     
     # 3. 创建推理包装器
     wrapper = FashionInferenceWrapper(

@@ -29,14 +29,58 @@
 
 ## 快速开始
 
+### ⚠️ 重要：属性名称配置
+
+推理系统需要知道每个属性索引对应的名称。有三种方式配置：
+
+**方式1：自动从数据集加载（推荐）**
+- 系统会自动从 `/home/cv_model/deepfashion` 读取属性定义
+- 无需额外配置
+
+**方式2：手动指定属性文件**
+```bash
+python quick_inference.py --model model.pth --image test.jpg \
+    --attr-file /path/to/list_attr_cloth.txt
+```
+
+**方式3：在代码中指定**
+```python
+from inference import get_attr_names_from_dataset
+
+# 从数据集加载
+attr_names = get_attr_names_from_dataset("/home/cv_model/deepfashion")
+wrapper = FashionInferenceWrapper(model=model, attr_names=attr_names)
+```
+
+### 查看数据集中的属性列表
+
+```bash
+# 查看所有属性
+python extract_attr_names.py
+
+# 保存属性到文件
+python extract_attr_names.py --output attr_names.txt
+
+# 保存为JSON格式（包含详细信息）
+python extract_attr_names.py --output attr_names.json --format json
+```
+
+---
+
 ### 方法1：使用命令行工具
 
 ```bash
-# 单张图片推理
+# 单张图片推理（自动加载属性）
 python quick_inference.py \
     --model checkpoints/best_model.pth \
     --image test_image.jpg \
     --output result.json
+
+# 指定属性文件
+python quick_inference.py \
+    --model checkpoints/best_model.pth \
+    --image test_image.jpg \
+    --attr-file /path/to/list_attr_cloth.txt
 
 # 批量推理
 python quick_inference.py \
@@ -55,21 +99,25 @@ python quick_inference.py \
 
 ```python
 import torch
-from inference import FashionInferenceWrapper
+from inference import FashionInferenceWrapper, get_attr_names_from_dataset
 
 # 1. 加载模型
 model = torch.load('checkpoints/best_model.pth')
 
-# 2. 创建推理包装器
+# 2. 从数据集加载属性名称（推荐）
+attr_names = get_attr_names_from_dataset("/home/cv_model/deepfashion")
+
+# 3. 创建推理包装器
 wrapper = FashionInferenceWrapper(
     model=model,
+    attr_names=attr_names,  # 使用数据集中的属性
     threshold=0.5
 )
 
-# 3. 推理单张图片
+# 4. 推理单张图片
 result = wrapper.predict_single('test_image.jpg')
 
-# 4. 查看结果
+# 5. 查看结果
 print(wrapper.get_summary(result))
 print(f"检测到的属性: {result['attributes']['predicted']}")
 ```
@@ -151,31 +199,60 @@ for result in results:
     print(f"属性: {result['attributes']['predicted']}")
 ```
 
-### 3. 使用自定义属性名称
+### 3. 使用数据集中的属性名称（重要）
 
 ```python
-from inference import FashionInferenceWrapper, load_attr_names_from_file
+from inference import (
+    FashionInferenceWrapper, 
+    load_attr_names_from_file,
+    get_attr_names_from_dataset
+)
 import torch
 
-# 从DeepFashion标注文件加载属性名称
-attr_file = "/path/to/list_attr_cloth.txt"
+# 方式1：从数据集根目录自动加载（最简单，推荐）
+attr_names = get_attr_names_from_dataset("/home/cv_model/deepfashion")
+
+# 方式2：从属性定义文件加载
+attr_file = "/home/cv_model/deepfashion/Category and Attribute Prediction Benchmark/Anno_fine/list_attr_cloth.txt"
 attr_names = load_attr_names_from_file(attr_file)
 
-# 或手动指定
+# 方式3：手动指定（不推荐，除非有特殊需求）
+# 注意：属性顺序必须与训练时完全一致！
 attr_names = [
-    'black', 'white', 'floral', 'striped', 'long_sleeve',
-    'short_sleeve', 'cotton', 'denim', 'leather', 'loose', ...
+    'black', 'white', 'more_colors', 'floral', 'graphic', ...
 ]
+
+# 验证属性数量
+print(f"加载了 {len(attr_names)} 个属性")
+print(f"前5个属性: {attr_names[:5]}")
 
 # 创建包装器
 model = torch.load('checkpoints/best_model.pth')
 wrapper = FashionInferenceWrapper(
     model=model,
-    attr_names=attr_names
+    attr_names=attr_names  # 必须提供正确的属性名称
 )
 
 # 推理
 result = wrapper.predict_single('test_image.jpg')
+```
+
+### 3.1 查看数据集中有哪些属性
+
+使用提供的工具脚本查看：
+
+```bash
+# 查看所有属性（按类型分组）
+python extract_attr_names.py
+
+# 保存属性列表到文件
+python extract_attr_names.py --output my_attrs.txt
+
+# 保存为JSON（包含类型等详细信息）
+python extract_attr_names.py --output my_attrs.json --format json
+
+# 保存为Python代码
+python extract_attr_names.py --output my_attrs.py --format python
 ```
 
 ### 4. 启用纹理分类
@@ -464,6 +541,62 @@ python quick_inference.py \
 
 ---
 
+## 重要说明：属性名称配置
+
+### 为什么需要配置属性名称？
+
+模型输出的是**数值型的logits**（如 `[0.2, 0.8, -0.5, ...]`），每个位置对应一个属性。为了让这些数字有意义，我们需要一个**属性名称列表**来映射：
+
+```
+索引 0 -> 'black'     (logits[0] = 0.2)
+索引 1 -> 'white'     (logits[1] = 0.8)  ✓ 预测为正
+索引 2 -> 'floral'    (logits[2] = -0.5)
+...
+```
+
+### ⚠️ 关键要求
+
+1. **属性顺序必须与训练时一致**
+   - 如果训练时属性顺序是 `['black', 'white', 'floral']`
+   - 推理时必须使用**完全相同的顺序**
+   - 否则输出结果会完全错误！
+
+2. **属性数量必须匹配**
+   - 模型输出26个logits，就需要26个属性名称
+   - 数量不匹配会导致索引错误
+
+3. **推荐使用数据集原始定义**
+   - 使用 `get_attr_names_from_dataset()` 自动加载
+   - 保证与训练时完全一致
+
+### 如何验证属性配置是否正确？
+
+```python
+from inference import get_attr_names_from_dataset
+import torch
+
+# 加载模型和属性
+model = torch.load('checkpoints/best_model.pth')
+attr_names = get_attr_names_from_dataset()
+
+# 验证
+print(f"模型期望的属性数量: {model.num_classes}")  # 如果模型有这个属性
+print(f"提供的属性数量: {len(attr_names)}")
+
+# 如果数量不匹配，会有问题！
+assert len(attr_names) == 26, "属性数量不匹配！"
+```
+
+### 三种配置方式对比
+
+| 方式 | 优点 | 缺点 | 推荐度 |
+|------|------|------|--------|
+| **自动加载**<br/>`get_attr_names_from_dataset()` | 最准确，自动从数据集读取 | 需要数据集文件存在 | ⭐⭐⭐⭐⭐ |
+| **文件加载**<br/>`load_attr_names_from_file()` | 灵活，可指定任意文件 | 需要手动指定路径 | ⭐⭐⭐⭐ |
+| **手动指定**<br/>`attr_names=[...]` | 最灵活 | 容易出错，难以维护 | ⭐⭐ |
+
+---
+
 ## 常见问题
 
 ### Q1: 如何选择合适的阈值？
@@ -483,20 +616,31 @@ python quick_inference.py \
 3. 减少输入尺寸（修改代码中的 `img_size` 参数）
 4. 使用模型量化（需要额外配置）
 
-### Q3: 如何添加自定义属性？
+### Q3: 推理结果的属性名称不对怎么办？
 
-**A:** 
+**A:** 这通常是因为属性名称列表配置错误。请检查：
+
+1. **确认使用了正确的属性文件**
+```bash
+# 查看数据集中的属性
+python extract_attr_names.py
+```
+
+2. **使用自动加载而不是手动指定**
 ```python
-# 方法1：直接指定
-custom_attrs = ['my_attr1', 'my_attr2', ...]
-wrapper = FashionInferenceWrapper(model=model, attr_names=custom_attrs)
+# ✓ 推荐：从数据集自动加载
+from inference import get_attr_names_from_dataset
+attr_names = get_attr_names_from_dataset()
 
-# 方法2：从文件加载并修改
-from inference import load_attr_names_from_file
+# ✗ 不推荐：手动硬编码（容易出错）
+attr_names = ['black', 'white', ...]  # 可能与训练时不一致
+```
 
-attrs = load_attr_names_from_file('list_attr_cloth.txt')
-attrs.append('new_custom_attr')
-wrapper = FashionInferenceWrapper(model=model, attr_names=attrs)
+3. **验证属性顺序和数量**
+```python
+# 打印前几个属性确认
+print(f"属性数量: {len(attr_names)}")
+print(f"前10个属性: {attr_names[:10]}")
 ```
 
 ### Q4: 推理结果为空怎么办？
