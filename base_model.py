@@ -12,7 +12,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # 定义数据集路径
-DEEPFASHION_ROOT = "/home/cv_model/deepfashion"
+DEEPFASHION_ROOT = "/home/cv_model/DeepFashion"
 CATEGORY_ROOT = os.path.join(DEEPFASHION_ROOT, "Category and Attribute Prediction Benchmark")
 CATEGORY_ANNO_DIR = os.path.join(CATEGORY_ROOT, "Anno_fine")
 CATEGORY_ANNO_COARSE_DIR = os.path.join(CATEGORY_ROOT, "Anno_coarse")
@@ -603,46 +603,67 @@ class FullModel(nn.Module):
             nn.Sigmoid()
         )
         
-        # 纹理分类头（如果启用）
+        # 纹理分类头（如果启用）- 使用更深层和专门化的架构
         if enable_textile_classification:
-            # Fabric分类头
+            # 纺织品特征适配层 - 简化架构避免梯度问题
+            self.textile_adapter = nn.Sequential(
+                nn.Linear(2048, 512),
+                nn.BatchNorm1d(512),
+                nn.ReLU(),
+                nn.Dropout(0.1)
+            )
+            
+            # Fabric分类头 - 简化架构
             self.fabric_head = nn.Sequential(
-                nn.Linear(2048, 512),
-                nn.BatchNorm1d(512),
+                nn.Linear(512, 128),
+                nn.BatchNorm1d(128),
                 nn.ReLU(),
-                nn.Dropout(0.3),
-                nn.Linear(512, 256),
-                nn.BatchNorm1d(256),
-                nn.ReLU(),
-                nn.Dropout(0.3),
-                nn.Linear(256, num_fabric_classes)
+                nn.Dropout(0.1),
+                nn.Linear(128, num_fabric_classes)
             )
             
-            # Fiber分类头
+            # Fiber分类头 - 简化架构
             self.fiber_head = nn.Sequential(
-                nn.Linear(2048, 512),
-                nn.BatchNorm1d(512),
+                nn.Linear(512, 128),
+                nn.BatchNorm1d(128),
                 nn.ReLU(),
-                nn.Dropout(0.3),
-                nn.Linear(512, 256),
-                nn.BatchNorm1d(256),
-                nn.ReLU(),
-                nn.Dropout(0.3),
-                nn.Linear(256, num_fiber_classes)
+                nn.Dropout(0.1),
+                nn.Linear(128, num_fiber_classes)
             )
             
-            # 统一纹理分类头（用于混合分类）
+            # 统一纹理分类头（用于混合分类）- 简化架构
             self.textile_head = nn.Sequential(
-                nn.Linear(2048, 512),
-                nn.BatchNorm1d(512),
+                nn.Linear(512, 128),
+                nn.BatchNorm1d(128),
                 nn.ReLU(),
-                nn.Dropout(0.3),
-                nn.Linear(512, 256),
-                nn.BatchNorm1d(256),
-                nn.ReLU(),
-                nn.Dropout(0.3),
-                nn.Linear(256, max(num_fabric_classes, num_fiber_classes))
+                nn.Dropout(0.1),
+                nn.Linear(128, max(num_fabric_classes, num_fiber_classes))
             )
+            
+            # 初始化纹理分类头的权重
+            self._init_textile_heads()
+
+    def _init_textile_heads(self):
+        """初始化纺织品分类头的权重，使用渐进式初始化"""
+        def init_adapter_weights(m):
+            if isinstance(m, nn.Linear):
+                # 适配层使用标准Xavier初始化
+                nn.init.xavier_normal_(m.weight, gain=1.0)
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+        
+        def init_classifier_weights(m):
+            if isinstance(m, nn.Linear):
+                # 分类器使用更小的初始化
+                nn.init.xavier_normal_(m.weight, gain=0.1)
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+        
+        # 分别初始化不同层
+        self.textile_adapter.apply(init_adapter_weights)
+        self.fabric_head.apply(init_classifier_weights)
+        self.fiber_head.apply(init_classifier_weights)
+        self.textile_head.apply(init_classifier_weights)
 
     def forward(self, images, img_names=None):
         """前向传播"""
@@ -725,21 +746,21 @@ class FullModel(nn.Module):
             seg_logits = torch.clamp(seg_logits, -10, 10)
             outputs['seg_logits'] = seg_logits
 
-        # 10. 纹理分类（如果启用）
+        # 10. 纹理分类（如果启用）- 使用专门的适配层
         if self.enable_textile_classification:
-            # 使用全局特征进行纹理分类
-            textile_features = global_features
+            # 首先通过适配层转换特征
+            adapted_features = self.textile_adapter(global_features)
             
-            # Fabric分类
-            fabric_logits = self.fabric_head(textile_features)
+            # Fabric分类 - 使用适配后的特征
+            fabric_logits = self.fabric_head(adapted_features)
             outputs['fabric_logits'] = fabric_logits
             
-            # Fiber分类
-            fiber_logits = self.fiber_head(textile_features)
+            # Fiber分类 - 使用适配后的特征
+            fiber_logits = self.fiber_head(adapted_features)
             outputs['fiber_logits'] = fiber_logits
             
             # 统一纹理分类（用于混合训练）
-            textile_logits = self.textile_head(textile_features)
+            textile_logits = self.textile_head(adapted_features)
             outputs['textile_logits'] = textile_logits
 
         return outputs
