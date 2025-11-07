@@ -3,7 +3,7 @@
 按照除segment以外的key分组，计算lot个数和平均值
 """
 
-from django.db.models import Count, Avg, F
+from django.db.models import Count, Avg, F, Value, CharField
 
 
 def get_lot_aggregated_data(segment, r_facility, r_owner, r_prodgroup3, request, r_start, r_end, r_timewindow, r_cal=None):
@@ -65,7 +65,7 @@ def get_lot_aggregated_data(segment, r_facility, r_owner, r_prodgroup3, request,
             r_cal.append('_')
         filters['cal__in'] = r_cal
 
-    # 定义分组字段
+    # 定义分组字段（不包含segment，segment将作为固定值添加）
     group_by_fields = [
         'prodgroup3',
         time_field,  # 根据timewindow动态选择
@@ -87,29 +87,48 @@ def get_lot_aggregated_data(segment, r_facility, r_owner, r_prodgroup3, request,
 
     qs = None
 
-    # 根据segment选择对应的Model
+    # 根据segment选择对应的Model，并添加segment标识
     if segment == 'assy':
-        qs = AssyLotModel.objects.filter(**filters)
+        qs = AssyLotModel.objects.filter(**filters).annotate(
+            segment=Value('assy', output_field=CharField())
+        )
     elif segment == 'finish':
-        qs = FinishLotModel.objects.filter(**filters)
+        qs = FinishLotModel.objects.filter(**filters).annotate(
+            segment=Value('finish', output_field=CharField())
+        )
     elif segment == 'atpo':
-        qs = TestAtpoLotModel.objects.filter(**filters)
+        qs = TestAtpoLotModel.objects.filter(**filters).annotate(
+            segment=Value('atpo', output_field=CharField())
+        )
     elif segment == 'fpo':
-        qs = TestFpoLotModel.objects.filter(**filters)
+        qs = TestFpoLotModel.objects.filter(**filters).annotate(
+            segment=Value('fpo', output_field=CharField())
+        )
     elif segment == 'assy_ifs':
-        qs = IFSAssyLotModel.objects.filter(**filters)
+        qs = IFSAssyLotModel.objects.filter(**filters).annotate(
+            segment=Value('assy_ifs', output_field=CharField())
+        )
     elif segment == 'finish_ifs':
-        qs = IFSFinishLotModel.objects.filter(**filters)
+        qs = IFSFinishLotModel.objects.filter(**filters).annotate(
+            segment=Value('finish_ifs', output_field=CharField())
+        )
     elif segment == 'atpo_ifs':
-        qs = IFSTestAtpoLotModel.objects.filter(**filters)
+        qs = IFSTestAtpoLotModel.objects.filter(**filters).annotate(
+            segment=Value('atpo_ifs', output_field=CharField())
+        )
     elif segment == 'fpo_ifs':
-        qs = IFSTestFpoLotModel.objects.filter(**filters)
+        qs = IFSTestFpoLotModel.objects.filter(**filters).annotate(
+            segment=Value('fpo_ifs', output_field=CharField())
+        )
 
     if qs is None:
         return []
 
+    # 将segment添加到分组字段中
+    group_by_fields_with_segment = ['segment'] + group_by_fields
+
     # 执行分组和聚合
-    result = qs.values(*group_by_fields).annotate(**aggregations).order_by(*group_by_fields)
+    result = qs.values(*group_by_fields_with_segment).annotate(**aggregations).order_by(*group_by_fields_with_segment)
 
     result_list = list(result)
     
@@ -257,6 +276,7 @@ aggregated_data = get_lot_list_with_range_and_aggregation(
 # 返回的聚合数据格式示例：
 [
     {
+        'segment': 'assy',  # segment标识
         'prodgroup3': 'PG1',
         'out_month': '202301',
         'resp_area_raw': 'Area1',
@@ -269,6 +289,21 @@ aggregated_data = get_lot_list_with_range_and_aggregation(
         'avg_intel_products': 85.5,  # Intel_Products的平均值
         'avg_intel_foundry_non_atm': 65.3,  # Intel_Foundry_Non_ATM的平均值
         'avg_intel_foundry_atm': 45.2  # Intel_Foundry_ATM的平均值
+    },
+    {
+        'segment': 'assy',  # 同一segment的另一组数据
+        'prodgroup3': 'PG2',
+        'out_month': '202301',
+        'resp_area_raw': 'Area2',
+        'responsible_org': 'Org2',
+        'excursion_type': 'Type2',
+        'responsible_func_area': 'FuncArea2',
+        'xrb': 'XRB2',
+        'xrb_title': 'Title2',
+        'lot_count': 200,
+        'avg_intel_products': 90.2,
+        'avg_intel_foundry_non_atm': 70.5,
+        'avg_intel_foundry_atm': 50.8
     },
     # ... 更多分组数据
 ]
