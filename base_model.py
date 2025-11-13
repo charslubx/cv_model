@@ -282,11 +282,8 @@ class MultiScaleFeatureExtractor(nn.Module):
         )
 
     def _get_total_channels(self, cnn_type: str, layers: list) -> int:
-        channel_map = {
-            'resnet50': {'layer1': 256, 'layer2': 512, 'layer3': 1024, 'layer4': 2048},
-            'resnet101': {'layer1': 256, 'layer2': 512, 'layer3': 1024, 'layer4': 2048}
-        }
-        return sum([channel_map[cnn_type][layer] for layer in layers])
+        # FPN输出统一为256通道，所以总通道数 = 256 * 提取层数
+        return 256 * len(layers)
 
     def forward(self, x: Tensor) -> tuple:
         # 初始特征提取
@@ -301,24 +298,39 @@ class MultiScaleFeatureExtractor(nn.Module):
 
         # FPN特征增强
         fpn_features = self.fpn(features)
+        # fpn_features = [P1, P2, P3, P4]，每个都是256通道
+        # P1: (B,256,56,56), P2: (B,256,28,28), P3: (B,256,14,14), P4: (B,256,7,7)
+        
+        # 构建FPN特征字典，方便索引
+        fpn_dict = {
+            'layer1': fpn_features[0],  # P1
+            'layer2': fpn_features[1],  # P2
+            'layer3': fpn_features[2],  # P3
+            'layer4': fpn_features[3]   # P4
+        }
 
-        # 特征融合
+        # 特征融合：使用FPN增强后的特征
         if len(self.layers_to_extract) > 1:
-            selected_features = [features[name] for name in self.layers_to_extract]
-            target_size = selected_features[-1].shape[2:]
+            # 选择FPN特征而不是原始特征
+            selected_fpn_features = [fpn_dict[name] for name in self.layers_to_extract]
+            target_size = selected_fpn_features[-1].shape[2:]
+            
+            # 上采样对齐（FPN特征都是256通道）
             resized_features = [
-                                   F.interpolate(feat, size=target_size, mode='bilinear', align_corners=False)
-                                   for feat in selected_features[:-1]
-                               ] + [selected_features[-1]]
+                F.interpolate(feat, size=target_size, mode='bilinear', align_corners=False)
+                for feat in selected_fpn_features[:-1]
+            ] + [selected_fpn_features[-1]]
+            
+            # 拼接FPN特征：256*3 = 768通道
             fused = torch.cat(resized_features, dim=1)
         else:
-            fused = features[self.layers_to_extract[0]]
+            fused = fpn_dict[self.layers_to_extract[0]]
 
         # 返回多个特征表示
         return {
-            'global': F.normalize(self.fuse(fused), p=2, dim=1),  # 全局特征
-            'fpn': fpn_features,  # FPN特征
-            'final': features['layer4']  # 最后一层特征
+            'global': F.normalize(self.fuse(fused), p=2, dim=1),  # 全局特征（使用FPN增强）
+            'fpn': fpn_features,  # FPN特征（用于其他任务）
+            'final': features['layer4']  # 最后一层原始特征（用于分割）
         }
 
 
