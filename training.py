@@ -115,8 +115,8 @@ class DataValidator:
 # ---------------------- TextileNet数据集类 ----------------------
 class TextileNetDataset(Dataset):
     """TextileNet纹理分类数据集（fabric和fiber）"""
-    
-    def __init__(self, 
+
+    def __init__(self,
                  root_dir: str,  # fabric或fiber根目录
                  dataset_type: str = 'fabric',  # 'fabric' 或 'fiber'
                  split: str = 'train',  # 'train' 或 'test'
@@ -136,63 +136,63 @@ class TextileNetDataset(Dataset):
         self.split = split
         self.transform = transform
         self.max_retry = max_retry
-        
+
         # 构建数据集路径
         self.data_dir = os.path.join(root_dir, dataset_type, split)
-        
+
         if not os.path.exists(self.data_dir):
             raise ValueError(f"数据集路径不存在: {self.data_dir}")
-        
+
         # 获取所有类别
-        self.classes = sorted([d for d in os.listdir(self.data_dir) 
-                              if os.path.isdir(os.path.join(self.data_dir, d))])
+        self.classes = sorted([d for d in os.listdir(self.data_dir)
+                               if os.path.isdir(os.path.join(self.data_dir, d))])
         self.class_to_idx = {cls_name: idx for idx, cls_name in enumerate(self.classes)}
-        
+
         # 收集所有图像文件
         self.samples = []
         self._load_samples()
-        
+
         logger.info(f"TextileNet {dataset_type} {split}数据集加载完成:")
         logger.info(f"- 类别数: {len(self.classes)}")
         logger.info(f"- 样本数: {len(self.samples)}")
         logger.info(f"- 类别: {self.classes}")
-    
+
     def _load_samples(self):
         """加载所有样本"""
         supported_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.webp'}
-        
+
         for class_name in self.classes:
             class_dir = os.path.join(self.data_dir, class_name)
             class_idx = self.class_to_idx[class_name]
-            
+
             # 遍历类别目录中的所有图像文件
             for filename in os.listdir(class_dir):
                 if any(filename.lower().endswith(ext) for ext in supported_extensions):
                     img_path = os.path.join(class_dir, filename)
                     self.samples.append((img_path, class_idx, class_name))
-    
+
     def get_class_names(self):
         """获取类别名称列表"""
         return self.classes
-    
+
     def get_num_classes(self):
         """获取类别数量"""
         return len(self.classes)
-    
+
     def __getitem__(self, idx):
         """获取单个样本"""
         retry_count = 0
         while retry_count < self.max_retry:
             try:
                 img_path, class_idx, class_name = self.samples[idx]
-                
+
                 # 读取图片
                 image = Image.open(img_path).convert('RGB')
-                
+
                 # 数据增强
                 if self.transform:
                     image = self.transform(image)
-                
+
                 # 准备样本数据
                 sample = {
                     'image': image,
@@ -201,9 +201,9 @@ class TextileNetDataset(Dataset):
                     'class_name': class_name,
                     'dataset_type': self.dataset_type
                 }
-                
+
                 return sample
-                
+
             except Exception as e:
                 retry_count += 1
                 logger.warning(f"加载TextileNet样本 {idx} 失败 (尝试 {retry_count}/{self.max_retry}): {str(e)}")
@@ -212,7 +212,7 @@ class TextileNetDataset(Dataset):
                     raise RuntimeError(f"无法加载TextileNet样本 {idx}")
                 # 随机选择另一个样本
                 idx = random.randint(0, len(self) - 1)
-    
+
     def __len__(self):
         """返回数据集的总样本数"""
         return len(self.samples)
@@ -221,8 +221,8 @@ class TextileNetDataset(Dataset):
 # ---------------------- 混合数据集类 ----------------------
 class MixedDataset(Dataset):
     """混合DeepFashion和TextileNet数据集"""
-    
-    def __init__(self, 
+
+    def __init__(self,
                  deepfashion_dataset: DeepFashionDataset = None,
                  fabric_dataset: TextileNetDataset = None,
                  fiber_dataset: TextileNetDataset = None,
@@ -244,39 +244,39 @@ class MixedDataset(Dataset):
         self.datasets = {}
         self.dataset_lengths = {}
         self.dataset_weights = {}
-        
+
         # 添加数据集
         if deepfashion_dataset is not None:
             self.datasets['deepfashion'] = deepfashion_dataset
             self.dataset_lengths['deepfashion'] = len(deepfashion_dataset)
             self.dataset_weights['deepfashion'] = deepfashion_weight
-            
+
         if fabric_dataset is not None:
             self.datasets['fabric'] = fabric_dataset
             self.dataset_lengths['fabric'] = len(fabric_dataset)
             self.dataset_weights['fabric'] = fabric_weight
-            
+
         if fiber_dataset is not None:
             self.datasets['fiber'] = fiber_dataset
             self.dataset_lengths['fiber'] = len(fiber_dataset)
             self.dataset_weights['fiber'] = fiber_weight
-        
+
         if not self.datasets:
             raise ValueError("至少需要提供一个数据集")
-        
+
         self.mixing_strategy = mixing_strategy
         self.total_length = self._calculate_total_length()
-        
+
         # 创建采样索引
         self.sample_indices = self._create_sample_indices()
-        
+
         logger.info(f"混合数据集创建完成:")
         logger.info(f"- 混合策略: {mixing_strategy}")
         logger.info(f"- 数据集: {list(self.datasets.keys())}")
         logger.info(f"- 各数据集长度: {self.dataset_lengths}")
         logger.info(f"- 各数据集权重: {self.dataset_weights}")
         logger.info(f"- 总长度: {self.total_length}")
-    
+
     def _calculate_total_length(self):
         """计算总长度"""
         if self.mixing_strategy == 'balanced':
@@ -284,18 +284,18 @@ class MixedDataset(Dataset):
             return max(self.dataset_lengths.values())
         elif self.mixing_strategy == 'weighted':
             # 加权策略：根据权重计算总长度
-            return int(sum(length * weight for length, weight in 
-                          zip(self.dataset_lengths.values(), self.dataset_weights.values())))
+            return int(sum(length * weight for length, weight in
+                           zip(self.dataset_lengths.values(), self.dataset_weights.values())))
         elif self.mixing_strategy == 'sequential':
             # 顺序策略：所有数据集长度之和
             return sum(self.dataset_lengths.values())
         else:
             raise ValueError(f"不支持的混合策略: {self.mixing_strategy}")
-    
+
     def _create_sample_indices(self):
         """创建采样索引"""
         indices = []
-        
+
         if self.mixing_strategy == 'balanced':
             # 平衡采样：每个数据集按比例采样
             for i in range(self.total_length):
@@ -303,11 +303,11 @@ class MixedDataset(Dataset):
                 dataset_probs = list(self.dataset_weights.values())
                 dataset_names = list(self.datasets.keys())
                 chosen_dataset = np.random.choice(dataset_names, p=dataset_probs)
-                
+
                 # 在选中的数据集中随机选择样本
                 dataset_idx = np.random.randint(0, self.dataset_lengths[chosen_dataset])
                 indices.append((chosen_dataset, dataset_idx))
-                
+
         elif self.mixing_strategy == 'weighted':
             # 加权采样
             for dataset_name, weight in self.dataset_weights.items():
@@ -315,27 +315,27 @@ class MixedDataset(Dataset):
                 for i in range(num_samples):
                     dataset_idx = i % self.dataset_lengths[dataset_name]
                     indices.append((dataset_name, dataset_idx))
-            
+
         elif self.mixing_strategy == 'sequential':
             # 顺序采样
             for dataset_name in self.datasets.keys():
                 for i in range(self.dataset_lengths[dataset_name]):
                     indices.append((dataset_name, i))
-        
+
         # 打乱索引
         np.random.shuffle(indices)
         return indices
-    
+
     def __getitem__(self, idx):
         """获取单个样本"""
         dataset_name, dataset_idx = self.sample_indices[idx]
         dataset = self.datasets[dataset_name]
-        
+
         sample = dataset[dataset_idx]
-        
+
         # 添加数据集来源信息
         sample['source_dataset'] = dataset_name
-        
+
         # 根据数据集类型处理标签，确保所有样本都有统一的字段
         if dataset_name == 'deepfashion':
             # DeepFashion保持原有的attr_labels，添加缺失的字段
@@ -348,7 +348,7 @@ class MixedDataset(Dataset):
             # 这里需要根据具体需求设计映射策略
             num_attrs = 26  # DeepFashion的属性数量
             attr_labels = torch.zeros(num_attrs, dtype=torch.float32)
-            
+
             # 简单映射策略：将纹理类别映射到特定属性位置
             if dataset_name == 'fabric':
                 # 面料类别映射到纹理相关属性
@@ -356,17 +356,17 @@ class MixedDataset(Dataset):
             elif dataset_name == 'fiber':
                 # 纤维类别映射到材质相关属性
                 attr_labels[1] = 1.0  # 假设第1个属性是材质相关
-            
+
             sample['attr_labels'] = attr_labels
             sample['textile_class_idx'] = sample['class_idx']
             sample['textile_class_name'] = sample['class_name']
-        
+
         return sample
-    
+
     def __len__(self):
         """返回数据集的总样本数"""
         return self.total_length
-    
+
     def get_dataset_info(self):
         """获取数据集信息"""
         info = {
@@ -374,7 +374,7 @@ class MixedDataset(Dataset):
             'datasets': {},
             'mixing_strategy': self.mixing_strategy
         }
-        
+
         for name, dataset in self.datasets.items():
             if name == 'deepfashion':
                 info['datasets'][name] = {
@@ -389,7 +389,7 @@ class MixedDataset(Dataset):
                     'classes': dataset.get_class_names(),
                     'num_classes': dataset.get_num_classes()
                 }
-        
+
         return info
 
 
@@ -615,23 +615,23 @@ class MixedDatasetTrainer:
             # 为纹理分类头设置更小的学习率
             textile_params = []
             other_params = []
-            
+
             for name, param in model.named_parameters():
                 if any(head in name for head in ['fabric_head', 'fiber_head', 'textile_head', 'textile_adapter']):
                     textile_params.append(param)
                 else:
                     other_params.append(param)
-            
+
             param_groups = [
                 {'params': other_params, 'lr': learning_rate},
                 {'params': textile_params, 'lr': learning_rate * 0.01}  # 大幅降低纹理分类头学习率
             ]
-            
+
             self.optimizer = torch.optim.AdamW(
                 param_groups,
                 weight_decay=0.15
             )
-            
+
             print(f"使用分层学习率: 主网络 {learning_rate:.2e}, 纺织品分类头 {learning_rate * 0.01:.2e}")
         else:
             self.optimizer = torch.optim.AdamW(
@@ -664,7 +664,7 @@ class MixedDatasetTrainer:
             num_tasks=num_tasks,
             device=device
         )
-        
+
         # 为纺织品分类设置保守的初始权重
         if enable_textile_classification:
             with torch.no_grad():
@@ -673,8 +673,8 @@ class MixedDatasetTrainer:
                     self.multi_task_loss.log_vars[1] = torch.log(torch.tensor(10.0))  # 权重为0.1
                 elif num_tasks == 3:  # attr + seg + textile
                     self.multi_task_loss.log_vars[2] = torch.log(torch.tensor(10.0))  # 权重为0.1
-                
-                print(f"设置纺织品分类任务初始权重: {1.0/10.0:.2f}")
+
+                print(f"设置纺织品分类任务初始权重: {1.0 / 10.0:.2f}")
 
         # EMA模型
         self.ema = torch.optim.swa_utils.AveragedModel(model)
@@ -725,12 +725,12 @@ class MixedDatasetTrainer:
                     label_val = label.item()
                 else:
                     label_val = label
-                
+
                 if label_val >= 0:  # 只保留有效标签
                     valid_textile_labels.append(torch.tensor(label_val))
                 else:
                     valid_textile_labels.append(torch.tensor(-1))  # 保持索引一致性
-            
+
             textile_labels = torch.stack(valid_textile_labels).to(self.device)
 
         # 获取数据集来源信息
@@ -766,20 +766,20 @@ class MixedDatasetTrainer:
             if self.enable_textile_classification and textile_labels is not None:
                 textile_loss_total = torch.tensor(0.0, device=self.device)
                 textile_count = 0
-                
+
                 # 处理fabric样本
                 fabric_mask = torch.tensor([ds == 'fabric' for ds in source_datasets], device=self.device)
                 if fabric_mask.any() and 'fabric_logits' in outputs:
                     fabric_indices = torch.where(fabric_mask)[0]
                     fabric_pred = outputs['fabric_logits'][fabric_indices]
                     fabric_true = textile_labels[fabric_indices]
-                    
+
                     # 过滤掉无效标签（-1）
                     valid_mask = fabric_true >= 0
                     if valid_mask.any():
                         valid_fabric_pred = fabric_pred[valid_mask]
                         valid_fabric_true = fabric_true[valid_mask]
-                        
+
                         # 检查标签范围
                         if valid_fabric_true.max() < valid_fabric_pred.size(1) and valid_fabric_true.min() >= 0:
                             fabric_loss = self.textile_criterion(valid_fabric_pred, valid_fabric_true)
@@ -787,22 +787,23 @@ class MixedDatasetTrainer:
                             textile_loss_total += fabric_loss * 0.5  # 降低权重避免梯度爆炸
                             textile_count += 1
                         else:
-                            print(f"警告: Fabric标签范围异常 - min: {valid_fabric_true.min()}, max: {valid_fabric_true.max()}, 预测维度: {valid_fabric_pred.size(1)}")
+                            print(
+                                f"警告: Fabric标签范围异常 - min: {valid_fabric_true.min()}, max: {valid_fabric_true.max()}, 预测维度: {valid_fabric_pred.size(1)}")
                     # else: 没有有效的fabric样本，跳过
-                
+
                 # 处理fiber样本
                 fiber_mask = torch.tensor([ds == 'fiber' for ds in source_datasets], device=self.device)
                 if fiber_mask.any() and 'fiber_logits' in outputs:
                     fiber_indices = torch.where(fiber_mask)[0]
                     fiber_pred = outputs['fiber_logits'][fiber_indices]
                     fiber_true = textile_labels[fiber_indices]
-                    
+
                     # 过滤掉无效标签（-1）
                     valid_mask = fiber_true >= 0
                     if valid_mask.any():
                         valid_fiber_pred = fiber_pred[valid_mask]
                         valid_fiber_true = fiber_true[valid_mask]
-                        
+
                         # 检查标签范围
                         if valid_fiber_true.max() < valid_fiber_pred.size(1) and valid_fiber_true.min() >= 0:
                             fiber_loss = self.textile_criterion(valid_fiber_pred, valid_fiber_true)
@@ -810,9 +811,10 @@ class MixedDatasetTrainer:
                             textile_loss_total += fiber_loss * 0.5  # 降低权重避免梯度爆炸
                             textile_count += 1
                         else:
-                            print(f"警告: Fiber标签范围异常 - min: {valid_fiber_true.min()}, max: {valid_fiber_true.max()}, 预测维度: {valid_fiber_pred.size(1)}")
+                            print(
+                                f"警告: Fiber标签范围异常 - min: {valid_fiber_true.min()}, max: {valid_fiber_true.max()}, 预测维度: {valid_fiber_pred.size(1)}")
                     # else: 没有有效的fiber样本，跳过
-                
+
                 # 计算平均textile损失
                 if textile_count > 0:
                     textile_loss = textile_loss_total / textile_count
@@ -831,7 +833,7 @@ class MixedDatasetTrainer:
                 total_loss = self.multi_task_loss(loss_list)
             else:
                 total_loss = loss_list[0]
-            
+
             losses['total_loss'] = total_loss
 
         # 反向传播
@@ -1020,7 +1022,7 @@ def collate_fn(batch):
     all_keys = set()
     for sample in batch:
         all_keys.update(sample.keys())
-    
+
     # 组合所有样本
     output = {}
     for key in all_keys:
@@ -1050,7 +1052,7 @@ def collate_fn(batch):
                         values.append(torch.zeros_like(first_valid))
                     else:
                         values.append(None)
-        
+
         # 根据数据类型进行处理
         if key in ['img_name', 'class_name', 'textile_class_name', 'source_dataset']:
             output[key] = values
@@ -1360,30 +1362,226 @@ class HyperParameterOptimizer:
             logger.info(f"    {key}: {value}")
 
 
+# ---------------------- 单独DeepFashion训练器 ----------------------
+class DeepFashionTrainer:
+    """DeepFashion属性识别单独训练器"""
+
+    def __init__(self,
+                 model: nn.Module,
+                 train_loader: DataLoader,
+                 val_loader: DataLoader,
+                 device: str = "cuda" if torch.cuda.is_available() else "cpu",
+                 learning_rate: float = 3e-4):
+
+        self.model = model.to(device)
+        self.train_loader = train_loader
+        self.val_loader = val_loader
+        self.device = device
+
+        # 优化器
+        self.optimizer = torch.optim.AdamW(
+            model.parameters(),
+            lr=learning_rate,
+            weight_decay=0.01
+        )
+
+        # 学习率调度器
+        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            self.optimizer,
+            mode='max',
+            factor=0.5,
+            patience=3
+        )
+
+        # 损失函数
+        self.criterion = nn.BCEWithLogitsLoss()
+
+        # 早停
+        self.patience = 10
+        self.best_f1 = 0
+        self.patience_counter = 0
+
+        # 当前epoch
+        self.current_epoch = 0
+
+        # 多GPU支持
+        if torch.cuda.device_count() > 1:
+            self.model = nn.DataParallel(self.model)
+            logger.info(f"使用 {torch.cuda.device_count()} 个GPU!")
+
+    def _calculate_metrics(self, predictions, targets, threshold=0.5):
+        """计算评估指标"""
+        binary_preds = (predictions > threshold).float()
+
+        tp = (binary_preds * targets).sum(dim=0)
+        fp = (binary_preds * (1 - targets)).sum(dim=0)
+        fn = ((1 - binary_preds) * targets).sum(dim=0)
+
+        precision = tp / (tp + fp + 1e-8)
+        recall = tp / (tp + fn + 1e-8)
+        f1 = 2 * (precision * recall) / (precision + recall + 1e-8)
+
+        return {
+            'precision': precision.mean().item(),
+            'recall': recall.mean().item(),
+            'f1': f1.mean().item()
+        }
+
+    def train_epoch(self):
+        """训练一个epoch"""
+        self.model.train()
+        total_loss = 0
+        all_preds = []
+        all_targets = []
+
+        pbar = tqdm(self.train_loader, desc=f'训练 Epoch {self.current_epoch}')
+        for batch in pbar:
+            images = batch['image'].to(self.device)
+            labels = batch['attr_labels'].to(self.device)
+
+            self.optimizer.zero_grad()
+            outputs = self.model(images)
+            loss = self.criterion(outputs['attr_logits'], labels)
+
+            loss.backward()
+            self.optimizer.step()
+
+            total_loss += loss.item()
+            all_preds.append(torch.sigmoid(outputs['attr_logits']).detach().cpu())
+            all_targets.append(labels.cpu())
+
+            pbar.set_postfix({'loss': loss.item()})
+
+        all_preds = torch.cat(all_preds, dim=0)
+        all_targets = torch.cat(all_targets, dim=0)
+        metrics = self._calculate_metrics(all_preds, all_targets)
+        metrics['loss'] = total_loss / len(self.train_loader)
+
+        return metrics
+
+    def validate(self):
+        """验证模型"""
+        self.model.eval()
+        total_loss = 0
+        all_preds = []
+        all_targets = []
+
+        with torch.no_grad():
+            for batch in tqdm(self.val_loader, desc='验证'):
+                images = batch['image'].to(self.device)
+                labels = batch['attr_labels'].to(self.device)
+
+                outputs = self.model(images)
+                loss = self.criterion(outputs['attr_logits'], labels)
+
+                total_loss += loss.item()
+                all_preds.append(torch.sigmoid(outputs['attr_logits']).cpu())
+                all_targets.append(labels.cpu())
+
+        all_preds = torch.cat(all_preds, dim=0)
+        all_targets = torch.cat(all_targets, dim=0)
+        metrics = self._calculate_metrics(all_preds, all_targets)
+        metrics['loss'] = total_loss / len(self.val_loader)
+
+        return metrics
+
+    def train(self, epochs: int = 50, save_dir: str = "checkpoints"):
+        """训练模型"""
+        os.makedirs(save_dir, exist_ok=True)
+
+        for epoch in range(epochs):
+            self.current_epoch = epoch + 1
+
+            # 训练
+            train_metrics = self.train_epoch()
+
+            # 验证
+            val_metrics = self.validate()
+
+            # 更新学习率
+            self.scheduler.step(val_metrics['f1'])
+
+            # 输出训练信息
+            logger.info(f"\nEpoch {epoch + 1}/{epochs}")
+            logger.info(f"训练 - Loss: {train_metrics['loss']:.4f}, "
+                        f"F1: {train_metrics['f1']:.4f}, "
+                        f"P: {train_metrics['precision']:.4f}, "
+                        f"R: {train_metrics['recall']:.4f}")
+            logger.info(f"验证 - Loss: {val_metrics['loss']:.4f}, "
+                        f"F1: {val_metrics['f1']:.4f}, "
+                        f"P: {val_metrics['precision']:.4f}, "
+                        f"R: {val_metrics['recall']:.4f}")
+
+            # 保存最佳模型
+            if val_metrics['f1'] > self.best_f1:
+                self.best_f1 = val_metrics['f1']
+                self.patience_counter = 0
+
+                # 保存模型state_dict（用于FullAdaGAT）
+                model_to_save = self.model.module if hasattr(self.model, 'module') else self.model
+                model_path = os.path.join(save_dir, "best_model.pth")
+                torch.save(model_to_save.state_dict(), model_path)
+                logger.info(f"保存最佳模型到: {model_path}")
+            else:
+                self.patience_counter += 1
+
+            if self.patience_counter >= self.patience:
+                logger.info(f"在第 {epoch + 1} 轮提前停止训练")
+                break
+
+        logger.info(f"\n训练完成！最佳F1: {self.best_f1:.4f}")
+
+
 # ---------------------- 智能混合数据集训练主函数 ----------------------
 if __name__ == "__main__":
+    import argparse
+
+    # 添加命令行参数
+    parser = argparse.ArgumentParser(description='服装属性识别模型训练')
+    parser.add_argument('--mode', type=str, default='single', choices=['single', 'mixed'],
+                        help='训练模式: single=单独DeepFashion训练, mixed=混合数据集训练')
+    parser.add_argument('--epochs', type=int, default=30,
+                        help='训练轮数')
+    parser.add_argument('--batch_size', type=int, default=32,
+                        help='批次大小')
+    parser.add_argument('--lr', type=float, default=3e-4,
+                        help='学习率')
+    parser.add_argument('--save_dir', type=str, default=None,
+                        help='模型保存目录')
+
+    args = parser.parse_args()
+
     logger.info("=" * 80)
-    logger.info("开始智能混合数据集训练")
+    if args.mode == 'single':
+        logger.info("开始单独DeepFashion属性识别训练")
+    else:
+        logger.info("开始智能混合数据集训练")
     logger.info("=" * 80)
-    
-    # 1. 智能检测可用数据集
-    available_datasets = []
-    datasets = {}
-    
+
     # 定义数据集路径
     DEEPFASHION_ROOT = "/home/cv_model/DeepFashion"
     TEXTILE_ROOT = "/home/cv_model"
     FABRIC_ROOT = os.path.join(TEXTILE_ROOT, "fabric")
     FIBER_ROOT = os.path.join(TEXTILE_ROOT, "fiber")
-    
-    logger.info("检测可用数据集...")
-    
-    # 检查DeepFashion数据集
-    if os.path.exists(DEEPFASHION_ROOT):
+
+    # 设置保存目录
+    if args.save_dir is None:
+        args.save_dir = "deepfashion_checkpoints" if args.mode == 'single' else "smart_mixed_checkpoints"
+
+    # ========== 模式1: 单独DeepFashion训练 ==========
+    if args.mode == 'single':
+        logger.info("模式: 单独DeepFashion属性识别训练")
+        logger.info("=" * 80)
+
+        # 检查DeepFashion数据集
+        if not os.path.exists(DEEPFASHION_ROOT):
+            logger.error(f"DeepFashion数据集路径不存在: {DEEPFASHION_ROOT}")
+            exit(1)
+
         CATEGORY_ROOT = os.path.join(DEEPFASHION_ROOT, "Category and Attribute Prediction Benchmark")
         ANNO_DIR = os.path.join(CATEGORY_ROOT, "Anno_fine")
         IMG_DIR = os.path.join(CATEGORY_ROOT, "Img")
-        
+
         # 检查必要文件
         required_files = [
             os.path.join(ANNO_DIR, "train.txt"),
@@ -1391,72 +1589,216 @@ if __name__ == "__main__":
             os.path.join(ANNO_DIR, "val.txt"),
             os.path.join(ANNO_DIR, "val_attr.txt")
         ]
-        
-        if all(os.path.exists(f) for f in required_files):
-            available_datasets.append("DeepFashion")
-            logger.info("✓ DeepFashion数据集可用")
-        else:
-            logger.warning("✗ DeepFashion数据集文件不完整")
-    else:
-        logger.warning("✗ DeepFashion数据集路径不存在")
-    
-    # 检查Fabric数据集
-    fabric_train_path = os.path.join(FABRIC_ROOT, "train")
-    if os.path.exists(fabric_train_path) and os.listdir(fabric_train_path):
-        available_datasets.append("Fabric")
-        logger.info("✓ Fabric数据集可用")
-    else:
-        logger.warning("✗ Fabric数据集不可用")
-    
-    # 检查Fiber数据集
-    fiber_train_path = os.path.join(FIBER_ROOT, "train")
-    if os.path.exists(fiber_train_path) and os.listdir(fiber_train_path):
-        available_datasets.append("Fiber")
-        logger.info("✓ Fiber数据集可用")
-    else:
-        logger.warning("✗ Fiber数据集不可用")
-    
-    # 检查是否有可用数据集
-    if not available_datasets:
-        logger.error("没有找到任何可用的数据集！")
-        logger.error("请确保以下路径之一存在且包含数据：")
-        logger.error(f"  - DeepFashion: {DEEPFASHION_ROOT}")
-        logger.error(f"  - Fabric: {fabric_train_path}")
-        logger.error(f"  - Fiber: {fiber_train_path}")
-        exit(1)
-    
-    logger.info(f"找到可用数据集: {available_datasets}")
-    
-    # 2. 根据可用数据集调整权重
-    num_datasets = len(available_datasets)
-    if num_datasets == 1:
-        # 只有一个数据集
-        deepfashion_weight = 1.0 if "DeepFashion" in available_datasets else 0.0
-        fabric_weight = 1.0 if "Fabric" in available_datasets else 0.0
-        fiber_weight = 1.0 if "Fiber" in available_datasets else 0.0
-    elif num_datasets == 2:
-        # 两个数据集，平均分配
-        deepfashion_weight = 0.5 if "DeepFashion" in available_datasets else 0.0
-        fabric_weight = 0.5 if "Fabric" in available_datasets else 0.0
-        fiber_weight = 0.5 if "Fiber" in available_datasets else 0.0
-    else:
-        # 三个数据集都有
-        deepfashion_weight = 0.4
-        fabric_weight = 0.3
-        fiber_weight = 0.3
-    
-    logger.info(f"数据集权重分配: DeepFashion={deepfashion_weight}, Fabric={fabric_weight}, Fiber={fiber_weight}")
 
-    # 3. 数据增强和预处理
-    train_transform = transforms.Compose([
-        transforms.Resize((256, 256)),
-        transforms.RandomCrop(224),
-        transforms.RandomHorizontalFlip(),
-        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
-        transforms.RandomRotation(10),
-        transforms.ToTensor(),
-        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-    ])
+        if not all(os.path.exists(f) for f in required_files):
+            logger.error("DeepFashion数据集文件不完整！")
+            logger.error("缺失的文件:")
+            for f in required_files:
+                if not os.path.exists(f):
+                    logger.error(f"  - {f}")
+            exit(1)
+
+        logger.info("✓ DeepFashion数据集检查通过")
+
+        # 数据增强和预处理
+        train_transform = transforms.Compose([
+            transforms.Resize((256, 256)),
+            transforms.RandomCrop(224),
+            transforms.RandomHorizontalFlip(),
+            transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
+            transforms.RandomRotation(10),
+            transforms.ToTensor(),
+            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+        ])
+
+        val_transform = transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.ToTensor(),
+            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+        ])
+
+        # 加载DeepFashion数据集
+        logger.info("加载DeepFashion数据集...")
+        TRAIN_IMG_LIST = os.path.join(ANNO_DIR, "train.txt")
+        TRAIN_ATTR_FILE = os.path.join(ANNO_DIR, "train_attr.txt")
+        VAL_IMG_LIST = os.path.join(ANNO_DIR, "val.txt")
+        VAL_ATTR_FILE = os.path.join(ANNO_DIR, "val_attr.txt")
+
+        train_dataset = DeepFashionDataset(
+            img_list_file=TRAIN_IMG_LIST,
+            attr_file=TRAIN_ATTR_FILE,
+            image_dir=IMG_DIR,
+            transform=train_transform
+        )
+
+        val_dataset = DeepFashionDataset(
+            img_list_file=VAL_IMG_LIST,
+            attr_file=VAL_ATTR_FILE,
+            image_dir=IMG_DIR,
+            transform=val_transform
+        )
+
+        logger.info(f"DeepFashion加载成功: 训练集{len(train_dataset)}, 验证集{len(val_dataset)}")
+
+        # 创建数据加载器
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=args.batch_size,
+            shuffle=True,
+            num_workers=4,
+            pin_memory=True,
+            drop_last=True
+        )
+
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=args.batch_size,
+            shuffle=False,
+            num_workers=4,
+            pin_memory=True,
+            drop_last=False
+        )
+
+        logger.info(f"数据加载器创建成功: 训练批次{len(train_loader)}, 验证批次{len(val_loader)}")
+
+        # 创建FullAdaGAT模型
+        logger.info("创建FullAdaGAT模型...")
+        from ablation_models import FullAdaGAT
+
+        model = FullAdaGAT(
+            num_classes=26,  # DeepFashion属性数量
+            lambda_threshold=0.5
+        )
+
+        total_params = sum(p.numel() for p in model.parameters())
+        logger.info(f"模型创建成功，参数数量: {total_params:,}")
+
+        # 创建训练器
+        logger.info("创建训练器...")
+        trainer = DeepFashionTrainer(
+            model=model,
+            train_loader=train_loader,
+            val_loader=val_loader,
+            learning_rate=args.lr
+        )
+
+        # 开始训练
+        logger.info("=" * 80)
+        logger.info(f"开始训练...")
+        logger.info(f"训练轮数: {args.epochs}")
+        logger.info(f"批次大小: {args.batch_size}")
+        logger.info(f"学习率: {args.lr}")
+        logger.info(f"保存目录: {args.save_dir}")
+        logger.info("=" * 80)
+
+        try:
+            trainer.train(epochs=args.epochs, save_dir=args.save_dir)
+
+            logger.info("=" * 80)
+            logger.info("🎉 单独DeepFashion训练成功完成!")
+            logger.info(f"模型已保存到: {args.save_dir}/best_model.pth")
+            logger.info("=" * 80)
+
+        except Exception as e:
+            logger.error("=" * 80)
+            logger.error("❌ 训练过程中发生错误!")
+            logger.error(f"错误信息: {e}")
+            logger.error("=" * 80)
+            import traceback
+
+            traceback.print_exc()
+            exit(1)
+
+    # ========== 模式2: 混合数据集训练 ==========
+    else:
+        logger.info("模式: 智能混合数据集训练")
+        logger.info("=" * 80)
+
+        # 1. 智能检测可用数据集
+        available_datasets = []
+        datasets = {}
+
+        logger.info("检测可用数据集...")
+
+        # 检查DeepFashion数据集
+        if os.path.exists(DEEPFASHION_ROOT):
+            CATEGORY_ROOT = os.path.join(DEEPFASHION_ROOT, "Category and Attribute Prediction Benchmark")
+            ANNO_DIR = os.path.join(CATEGORY_ROOT, "Anno_fine")
+            IMG_DIR = os.path.join(CATEGORY_ROOT, "Img")
+
+            # 检查必要文件
+            required_files = [
+                os.path.join(ANNO_DIR, "train.txt"),
+                os.path.join(ANNO_DIR, "train_attr.txt"),
+                os.path.join(ANNO_DIR, "val.txt"),
+                os.path.join(ANNO_DIR, "val_attr.txt")
+            ]
+
+            if all(os.path.exists(f) for f in required_files):
+                available_datasets.append("DeepFashion")
+                logger.info("✓ DeepFashion数据集可用")
+            else:
+                logger.warning("✗ DeepFashion数据集文件不完整")
+        else:
+            logger.warning("✗ DeepFashion数据集路径不存在")
+
+        # 检查Fabric数据集
+        fabric_train_path = os.path.join(FABRIC_ROOT, "train")
+        if os.path.exists(fabric_train_path) and os.listdir(fabric_train_path):
+            available_datasets.append("Fabric")
+            logger.info("✓ Fabric数据集可用")
+        else:
+            logger.warning("✗ Fabric数据集不可用")
+
+        # 检查Fiber数据集
+        fiber_train_path = os.path.join(FIBER_ROOT, "train")
+        if os.path.exists(fiber_train_path) and os.listdir(fiber_train_path):
+            available_datasets.append("Fiber")
+            logger.info("✓ Fiber数据集可用")
+        else:
+            logger.warning("✗ Fiber数据集不可用")
+
+        # 检查是否有可用数据集
+        if not available_datasets:
+            logger.error("没有找到任何可用的数据集！")
+            logger.error("请确保以下路径之一存在且包含数据：")
+            logger.error(f"  - DeepFashion: {DEEPFASHION_ROOT}")
+            logger.error(f"  - Fabric: {fabric_train_path}")
+            logger.error(f"  - Fiber: {fiber_train_path}")
+            exit(1)
+
+        logger.info(f"找到可用数据集: {available_datasets}")
+
+        # 2. 根据可用数据集调整权重
+        num_datasets = len(available_datasets)
+        if num_datasets == 1:
+            # 只有一个数据集
+            deepfashion_weight = 1.0 if "DeepFashion" in available_datasets else 0.0
+            fabric_weight = 1.0 if "Fabric" in available_datasets else 0.0
+            fiber_weight = 1.0 if "Fiber" in available_datasets else 0.0
+        elif num_datasets == 2:
+            # 两个数据集，平均分配
+            deepfashion_weight = 0.5 if "DeepFashion" in available_datasets else 0.0
+            fabric_weight = 0.5 if "Fabric" in available_datasets else 0.0
+            fiber_weight = 0.5 if "Fiber" in available_datasets else 0.0
+        else:
+            # 三个数据集都有
+            deepfashion_weight = 0.4
+            fabric_weight = 0.3
+            fiber_weight = 0.3
+        
+        logger.info(f"数据集权重分配: DeepFashion={deepfashion_weight}, Fabric={fabric_weight}, Fiber={fiber_weight}")
+
+        # 3. 数据增强和预处理
+        train_transform = transforms.Compose([
+            transforms.Resize((256, 256)),
+            transforms.RandomCrop(224),
+            transforms.RandomHorizontalFlip(),
+            transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
+            transforms.RandomRotation(10),
+            transforms.ToTensor(),
+            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+        ])
 
     val_transform = transforms.Compose([
         transforms.Resize((224, 224)),
@@ -1468,7 +1810,7 @@ if __name__ == "__main__":
     deepfashion_train, deepfashion_val = None, None
     fabric_train, fabric_val = None, None
     fiber_train, fiber_val = None, None
-    
+
     # 加载DeepFashion数据集（如果可用）
     if "DeepFashion" in available_datasets:
         try:
@@ -1477,27 +1819,27 @@ if __name__ == "__main__":
             TRAIN_ATTR_FILE = os.path.join(ANNO_DIR, "train_attr.txt")
             VAL_IMG_LIST = os.path.join(ANNO_DIR, "val.txt")
             VAL_ATTR_FILE = os.path.join(ANNO_DIR, "val_attr.txt")
-            
+
             deepfashion_train = DeepFashionDataset(
                 img_list_file=TRAIN_IMG_LIST,
                 attr_file=TRAIN_ATTR_FILE,
                 image_dir=IMG_DIR,
                 transform=train_transform
             )
-            
+
             deepfashion_val = DeepFashionDataset(
                 img_list_file=VAL_IMG_LIST,
                 attr_file=VAL_ATTR_FILE,
                 image_dir=IMG_DIR,
                 transform=val_transform
             )
-            
+
             logger.info(f"DeepFashion加载成功: 训练集{len(deepfashion_train)}, 验证集{len(deepfashion_val)}")
-            
+
         except Exception as e:
             logger.error(f"DeepFashion数据集加载失败: {e}")
             available_datasets.remove("DeepFashion")
-    
+
     # 加载Fabric数据集（如果可用）
     if "Fabric" in available_datasets:
         try:
@@ -1508,7 +1850,7 @@ if __name__ == "__main__":
                 split='train',
                 transform=train_transform
             )
-            
+
             # 检查是否有test分割
             fabric_test_path = os.path.join(FABRIC_ROOT, "test")
             if os.path.exists(fabric_test_path) and os.listdir(fabric_test_path):
@@ -1521,14 +1863,14 @@ if __name__ == "__main__":
             else:
                 fabric_val = fabric_train  # 使用训练集作为验证集
                 logger.info("Fabric数据集没有test分割，使用train作为验证集")
-            
+
             logger.info(f"Fabric加载成功: 训练集{len(fabric_train)}, 验证集{len(fabric_val)}")
             logger.info(f"Fabric类别({fabric_train.get_num_classes()}个): {fabric_train.get_class_names()}")
-            
+
         except Exception as e:
             logger.error(f"Fabric数据集加载失败: {e}")
             available_datasets.remove("Fabric")
-    
+
     # 加载Fiber数据集（如果可用）
     if "Fiber" in available_datasets:
         try:
@@ -1539,7 +1881,7 @@ if __name__ == "__main__":
                 split='train',
                 transform=train_transform
             )
-            
+
             # 检查是否有test分割
             fiber_test_path = os.path.join(FIBER_ROOT, "test")
             if os.path.exists(fiber_test_path) and os.listdir(fiber_test_path):
@@ -1552,19 +1894,19 @@ if __name__ == "__main__":
             else:
                 fiber_val = fiber_train  # 使用训练集作为验证集
                 logger.info("Fiber数据集没有test分割，使用train作为验证集")
-            
+
             logger.info(f"Fiber加载成功: 训练集{len(fiber_train)}, 验证集{len(fiber_val)}")
             logger.info(f"Fiber类别({fiber_train.get_num_classes()}个): {fiber_train.get_class_names()}")
-            
+
         except Exception as e:
             logger.error(f"Fiber数据集加载失败: {e}")
             available_datasets.remove("Fiber")
-    
+
     # 最终检查是否还有可用数据集
     if not available_datasets:
         logger.error("所有数据集加载失败！")
         exit(1)
-    
+
     # 5. 创建混合数据集
     logger.info("创建混合数据集...")
     mixed_train_dataset = MixedDataset(
@@ -1576,7 +1918,7 @@ if __name__ == "__main__":
         fabric_weight=fabric_weight,
         fiber_weight=fiber_weight
     )
-    
+
     mixed_val_dataset = MixedDataset(
         deepfashion_dataset=deepfashion_val,
         fabric_dataset=fabric_val,
@@ -1586,7 +1928,7 @@ if __name__ == "__main__":
         fabric_weight=fabric_weight,
         fiber_weight=fiber_weight
     )
-    
+
     # 打印数据集信息
     logger.info("混合数据集创建成功:")
     train_info = mixed_train_dataset.get_dataset_info()
@@ -1615,14 +1957,14 @@ if __name__ == "__main__":
         drop_last=False,
         collate_fn=collate_fn
     )
-    
+
     logger.info(f"数据加载器创建成功: 训练批次{len(train_loader)}, 验证批次{len(val_loader)}")
 
     # 7. 智能创建模型
     # 根据可用数据集动态确定类别数量
     num_fabric_classes = fabric_train.get_num_classes() if fabric_train else 20
     num_fiber_classes = fiber_train.get_num_classes() if fiber_train else 32
-    
+
     logger.info("创建模型...")
     model = FullModel(
         num_classes=26,  # DeepFashion属性数量
@@ -1635,7 +1977,7 @@ if __name__ == "__main__":
         cnn_type='resnet50',
         weights='IMAGENET1K_V1'
     )
-    
+
     total_params = sum(p.numel() for p in model.parameters())
     logger.info(f"模型创建成功，参数数量: {total_params:,}")
 
@@ -1657,21 +1999,21 @@ if __name__ == "__main__":
     logger.info(f"训练轮数: 30")
     logger.info(f"保存目录: smart_mixed_checkpoints")
     logger.info("=" * 80)
-    
+
     try:
         trainer.train(epochs=30, save_dir="smart_mixed_checkpoints")
-        
+
         logger.info("=" * 80)
         logger.info("🎉 智能混合数据集训练成功完成!")
         logger.info("模型已保存到: smart_mixed_checkpoints/best_model.pth")
         logger.info("=" * 80)
-        
+
     except Exception as e:
         logger.error("=" * 80)
         logger.error("❌ 训练过程中发生错误!")
         logger.error(f"错误信息: {e}")
         logger.error("=" * 80)
         import traceback
+
         traceback.print_exc()
         exit(1)
-

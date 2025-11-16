@@ -23,9 +23,9 @@ logger.info(f"当前目录: {CURRENT_DIR}")
 logger.info(f"工作目录: {WORKSPACE_ROOT}")
 
 # 数据集根目录
-DEEPFASHION_ROOT = "/home/cv_model/deepfashion"
+DEEPFASHION_ROOT = "/home/cv_model/DeepFashion"
 CATEGORY_ROOT = os.path.join(DEEPFASHION_ROOT, "Category and Attribute Prediction Benchmark")
-CATEGORY_IMG_DIR = os.path.join(CATEGORY_ROOT, "Img", "img")
+CATEGORY_IMG_DIR = os.path.join(CATEGORY_ROOT, "Img")
 CATEGORY_ANNO_DIR = os.path.join(CATEGORY_ROOT, "Anno_fine")
 
 # 训练集文件

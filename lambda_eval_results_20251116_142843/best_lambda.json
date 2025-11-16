@@ -1,0 +1,6 @@
+{
+    "best_lambda": 0.7,
+    "best_f1": 0.5312513709068298,
+    "pretrained_model": "smart_mixed_checkpoints/best_model.pth",
+    "conclusion": "基于已训练模型的评估表明，当 λ 取 0.7 时，在验证集上可获得最优的 F1 表现（0.5313）。过小的 λ 导致图过于稠密，引入噪声邻居；过大的 λ 又会使图过于稀疏，削弱邻域信息传递。"
+}
