@@ -536,45 +536,38 @@ class FullModel(nn.Module):
             layers_to_extract=['layer2', 'layer3', 'layer4']
         )
 
-        # 特征增强模块
+        # 特征增强模块（适中dropout）
         self.feature_enhancer = nn.Sequential(
-            nn.Linear(2048, 1024),
-            nn.BatchNorm1d(1024),
-            nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(1024, 2048),
+            nn.Linear(2048, 2048),
             nn.BatchNorm1d(2048),
-            nn.ReLU()
+            nn.ReLU(),
+            nn.Dropout(0.15)  # 适中的dropout
         )
 
-        # GAT特征增强
+        # GAT特征增强（适中dropout）
         self.gat = StackedGAT(
             in_features=2048,
-            hidden_dims=gat_dims,
-            heads=gat_heads,
-            dropout=gat_dropout,
+            hidden_dims=[2048],  # 简化为单层，保持维度一致
+            heads=16,  # 增加注意力头数
+            dropout=0.2,  # 适中的dropout
             edge_dim=1,
             residual=True
         )
 
-        # GCN分类器 - 增强分类能力
+        # GCN分类器（适中dropout）
         self.gcn = GCNClassifier(
-            in_features=gat_dims[-1],
+            in_features=2048,  # 匹配GAT输出
             num_classes=num_classes,
-            hidden_dims=[512, 256]  # 增加隐藏层
+            hidden_dims=[1024]  # 简化为单层
         )
 
-        # 改进的属性分类头
+        # 简化的属性分类头（适中dropout）
         self.attr_head = nn.Sequential(
             nn.Linear(2048, 1024),
             nn.BatchNorm1d(1024),
             nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(1024, 512),
-            nn.BatchNorm1d(512),
-            nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(512, num_classes)
+            nn.Dropout(0.25),  # 适中的dropout
+            nn.Linear(1024, num_classes)
         )
 
         # 分割分支（如果启用）
@@ -584,22 +577,21 @@ class FullModel(nn.Module):
                 num_classes=1
             )
 
-        # 改进的特征融合
+        # 简化的特征融合（适中dropout）
         self.fusion_gate = nn.Sequential(
-            nn.Linear(2048 + gat_dims[-1], 512),
-            nn.BatchNorm1d(512),
+            nn.Linear(2048 * 2, 256),  # 两个2048维特征
             nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(512, 2),
+            nn.Dropout(0.15),  # 适中dropout
+            nn.Linear(256, 2),
             nn.Softmax(dim=1)
         )
 
-        # 类别权重预测器
+        # 类别权重预测器（适中dropout）
         self.class_weight_predictor = nn.Sequential(
-            nn.Linear(2048, 256),
+            nn.Linear(2048, 512),
             nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(256, num_classes),
+            nn.Dropout(0.1),  # 适中dropout
+            nn.Linear(512, num_classes),
             nn.Sigmoid()
         )
         
@@ -678,35 +670,40 @@ class FullModel(nn.Module):
         # 准备输出字典
         outputs = {}
 
-        # 1. 特征增强
+        # 1. 特征增强（不归一化，保留原始信息）
         global_features = self.feature_enhancer(features['global'])
-        global_features = F.normalize(global_features, p=2, dim=1)  # L2标准化
 
         # 2. 构建改进的邻接矩阵
+        # 先归一化用于计算相似度
+        normalized_features = F.normalize(global_features, p=2, dim=1)
+        
         # 计算余弦相似度
-        sim_matrix = F.cosine_similarity(
-            global_features.unsqueeze(1),
-            global_features.unsqueeze(0),
-            dim=2
-        )
+        sim_matrix = torch.matmul(normalized_features, normalized_features.t())
 
-        # 使用动态阈值
+        # 使用适中的动态阈值（平衡precision和recall）
         mean_sim = sim_matrix.mean()
         std_sim = sim_matrix.std()
-        threshold = mean_sim + 0.5 * std_sim  # 调整阈值计算
+        threshold = mean_sim + 0.4 * std_sim  # 适中的阈值
 
         # 构建稀疏邻接矩阵
         adj_matrix = (sim_matrix > threshold).float()
         adj_matrix = adj_matrix * sim_matrix  # 保留相似度权重
 
-        # 确保邻接矩阵非空
-        if adj_matrix.sum() == 0:
-            print("Warning: Empty adjacency matrix, adding self-loops")
-            adj_matrix = adj_matrix + torch.eye(adj_matrix.size(0), device=adj_matrix.device)
+        # 确保邻接矩阵非空且有自环
+        adj_matrix = adj_matrix + torch.eye(adj_matrix.size(0), device=adj_matrix.device)
+        
+        # 添加top-k连接确保最小连通性
+        batch_size = adj_matrix.size(0)
+        if batch_size > 1:
+            k_neighbors = min(5, batch_size - 1)
+            topk_values, topk_indices = torch.topk(sim_matrix, k_neighbors + 1, dim=1)
+            for i in range(batch_size):
+                for j in range(1, k_neighbors + 1):  # 跳过自己
+                    neighbor_idx = topk_indices[i, j]
+                    adj_matrix[i, neighbor_idx] = topk_values[i, j]
 
-        # 3. GAT特征增强
+        # 3. GAT特征增强（使用原始特征，不是归一化后的）
         gat_features = self.gat(global_features, adj_matrix)
-        gat_features = F.normalize(gat_features, p=2, dim=1)  # L2标准化
 
         # 4. GCN分类
         edge_index = adj_matrix.nonzero().t()
@@ -715,20 +712,19 @@ class FullModel(nn.Module):
         # 5. CNN特征分类
         cnn_logits = self.attr_head(global_features)
 
-        # 6. 预测类别权重
+        # 6. 预测类别权重（适中范围）
         class_weights = self.class_weight_predictor(global_features)
-        class_weights = torch.clamp(class_weights, 0.1, 1.0)  # 限制权重范围
+        class_weights = torch.clamp(class_weights, 0.6, 1.4)  # 适中范围
 
         # 7. 改进的特征融合
         fusion_input = torch.cat([global_features, gat_features], dim=1)
         fusion_weights = self.fusion_gate(fusion_input)
 
-        # 8. 加权融合
+        # 8. 加权融合（先融合再应用权重）
         attr_logits = fusion_weights[:, 0:1] * gcn_logits + fusion_weights[:, 1:2] * cnn_logits
-        attr_logits = attr_logits * class_weights  # 应用类别权重
-
-        # 输出稳定性检查
-        attr_logits = torch.clamp(attr_logits, -10, 10)  # 限制logits范围
+        
+        # 应用类别权重（适度影响）
+        attr_logits = attr_logits * (0.7 + 0.3 * class_weights)  # 适度应用权重
 
         outputs['attr_logits'] = attr_logits
         outputs['class_weights'] = class_weights

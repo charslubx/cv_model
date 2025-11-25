@@ -507,53 +507,54 @@ class FullAdaGAT(nn.Module):
             output_dims=2048
         )
         
-        # 特征增强器
+        # 特征增强器（适中dropout）
         self.feature_enhancer = nn.Sequential(
             nn.Linear(2048, 2048),
             nn.BatchNorm1d(2048),
             nn.ReLU(),
-            nn.Dropout(0.3)
+            nn.Dropout(0.15)  # 适中dropout
         )
         
-        # GAT
+        # GAT（增加注意力头数，适中dropout）
         self.gat = WeightedMultiHeadGAT(
             in_features=2048,
             out_features=2048,
-            heads=8,
-            dropout=0.3,
+            heads=16,
+            dropout=0.2,  # 适中dropout
             use_edge_weights=True
         )
         
-        # GCN分类器
+        # GCN分类器（适中dropout）
         self.gcn = GCNClassifier(
             in_features=2048,
             hidden_features=1024,
             num_classes=num_classes,
-            dropout=0.3
+            dropout=0.15  # 适中dropout
         )
         
-        # CNN分类器
+        # CNN分类器（适中dropout）
         self.attr_head = nn.Sequential(
             nn.Linear(2048, 1024),
+            nn.BatchNorm1d(1024),
             nn.ReLU(),
-            nn.Dropout(0.3),
+            nn.Dropout(0.25),  # 适中dropout
             nn.Linear(1024, num_classes)
         )
         
-        # 门控融合机制
+        # 门控融合机制（适中dropout）
         self.fusion_gate = nn.Sequential(
-            nn.Linear(2048 * 2, 512),
+            nn.Linear(2048 * 2, 256),
             nn.ReLU(),
-            nn.Dropout(0.3),
-            nn.Linear(512, 2),
+            nn.Dropout(0.15),  # 适中dropout
+            nn.Linear(256, 2),
             nn.Softmax(dim=1)
         )
         
-        # 类别权重预测器（用于长尾处理）
+        # 类别权重预测器（适中dropout）
         self.class_weight_predictor = nn.Sequential(
             nn.Linear(2048, 512),
             nn.ReLU(),
-            nn.Dropout(0.3),
+            nn.Dropout(0.1),  # 适中dropout
             nn.Linear(512, num_classes),
             nn.Sigmoid()
         )
@@ -562,32 +563,37 @@ class FullAdaGAT(nn.Module):
         features = self.feature_extractor(images)
         global_features = features['global']
         
-        # 特征增强
+        # 特征增强（不归一化，保留原始信息）
         global_features = self.feature_enhancer(global_features)
-        global_features = F.normalize(global_features, p=2, dim=1)
         
-        # 构建动态自适应阈值图
-        sim_matrix = F.cosine_similarity(
-            global_features.unsqueeze(1),
-            global_features.unsqueeze(0),
-            dim=2
-        )
+        # 构建动态自适应阈值图（只在计算相似度时归一化）
+        normalized_features = F.normalize(global_features, p=2, dim=1)
+        sim_matrix = torch.matmul(normalized_features, normalized_features.t())
         
-        # 使用动态阈值
+        # 使用适中的动态阈值（平衡precision和recall）
         mean_sim = sim_matrix.mean()
         std_sim = sim_matrix.std()
-        threshold = mean_sim + self.lambda_threshold * std_sim
+        threshold = mean_sim + (self.lambda_threshold * 0.8) * std_sim  # 适中阈值
         
         # 构建稀疏邻接矩阵
         adj_matrix = (sim_matrix > threshold).float()
         adj_matrix = adj_matrix * sim_matrix
         
-        if adj_matrix.sum() == 0:
-            adj_matrix = torch.eye(adj_matrix.size(0), device=adj_matrix.device)
+        # 确保有自环，并增加连接
+        adj_matrix = adj_matrix + torch.eye(adj_matrix.size(0), device=adj_matrix.device)
         
-        # GAT特征增强
+        # 添加top-k连接确保最小连通性
+        batch_size = adj_matrix.size(0)
+        if batch_size > 1:
+            k_neighbors = min(5, batch_size - 1)
+            topk_values, topk_indices = torch.topk(sim_matrix, k_neighbors + 1, dim=1)
+            for i in range(batch_size):
+                for j in range(1, k_neighbors + 1):  # 跳过自己
+                    neighbor_idx = topk_indices[i, j]
+                    adj_matrix[i, neighbor_idx] = topk_values[i, j]
+        
+        # GAT特征增强（使用原始特征，不归一化）
         gat_features = self.gat(global_features, adj_matrix)
-        gat_features = F.normalize(gat_features, p=2, dim=1)
         
         # 图分支分类
         edge_index = adj_matrix.nonzero().t()
@@ -596,20 +602,17 @@ class FullAdaGAT(nn.Module):
         # CNN分支分类
         cnn_logits = self.attr_head(global_features)
         
-        # 预测类别权重
+        # 预测类别权重（适中范围）
         class_weights = self.class_weight_predictor(global_features)
-        class_weights = torch.clamp(class_weights, 0.1, 1.0)
+        class_weights = torch.clamp(class_weights, 0.6, 1.4)  # 适中范围
         
         # 门控融合
         fusion_input = torch.cat([global_features, gat_features], dim=1)
         fusion_weights = self.fusion_gate(fusion_input)
         
-        # 加权融合
+        # 加权融合（适度应用权重）
         attr_logits = fusion_weights[:, 0:1] * gcn_logits + fusion_weights[:, 1:2] * cnn_logits
-        attr_logits = attr_logits * class_weights  # 应用类别权重
-        
-        # 输出稳定性检查
-        attr_logits = torch.clamp(attr_logits, -10, 10)
+        attr_logits = attr_logits * (0.7 + 0.3 * class_weights)  # 适度应用权重
         
         return {
             'attr_logits': attr_logits,
