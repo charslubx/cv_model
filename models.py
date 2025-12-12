@@ -19,15 +19,10 @@ class DictMixin:
     混入类，为 SQLAlchemy 模型添加便捷的字典转换方法
     """
     
-    def to_dict(self, exclude: Optional[List[str]] = None, 
-                include_relationships: bool = False) -> Dict[str, Any]:
+    def to_dict(self) -> Dict[str, Any]:
         """
-        将模型实例转换为字典
+        将模型实例转换为字典（简洁版本）
         
-        Args:
-            exclude: 要排除的字段列表
-            include_relationships: 是否包含关系字段
-            
         Returns:
             字典
             
@@ -35,86 +30,9 @@ class DictMixin:
             user = db.query(UserProfile).first()
             user_dict = user.to_dict()
             # {'id': 82, 'idsid': 'zhuqinyx', 'username': 'zhuqinyx'}
-            
-            # 排除某些字段
-            user_dict = user.to_dict(exclude=['id'])
-            # {'idsid': 'zhuqinyx', 'username': 'zhuqinyx'}
         """
-        if exclude is None:
-            exclude = []
-        
-        result = {}
-        
-        # 使用 inspect 获取所有列属性（兼容所有 SQLAlchemy 版本）
-        mapper = inspect(self.__class__)
-        
-        for column in mapper.column_attrs:
-            if column.key not in exclude:
-                value = getattr(self, column.key, None)
-                
-                # 处理特殊类型
-                if value is None:
-                    result[column.key] = None
-                elif isinstance(value, datetime):
-                    # datetime 转为字符串
-                    result[column.key] = value.isoformat()
-                elif hasattr(value, 'isoformat'):
-                    # 处理 date, time 等类型
-                    result[column.key] = value.isoformat()
-                else:
-                    result[column.key] = value
-        
-        # 如果需要包含关系字段
-        if include_relationships:
-            for relationship in mapper.relationships:
-                if relationship.key not in exclude:
-                    related = getattr(self, relationship.key, None)
-                    if related is not None:
-                        if hasattr(related, 'to_dict'):
-                            result[relationship.key] = related.to_dict()
-                        elif isinstance(related, list):
-                            result[relationship.key] = [
-                                item.to_dict() if hasattr(item, 'to_dict') else str(item)
-                                for item in related
-                            ]
-                        else:
-                            result[relationship.key] = str(related)
-        
-        return result
-    
-    def to_dict_simple(self) -> Dict[str, Any]:
-        """
-        简化版本 - 快速转换（不处理特殊类型）
-        
-        Returns:
-            字典
-        """
-        result = {}
-        mapper = inspect(self.__class__)
-        for column in mapper.column_attrs:
-            result[column.key] = getattr(self, column.key, None)
-        return result
-    
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]):
-        """
-        从字典创建模型实例
-        
-        Args:
-            data: 字典数据
-            
-        Returns:
-            模型实例
-            
-        Example:
-            data = {'idsid': 'test', 'username': 'testuser'}
-            user = UserProfile.from_dict(data)
-        """
-        # 只使用模型中存在的字段
-        mapper = inspect(cls)
-        valid_keys = {column.key for column in mapper.column_attrs}
-        filtered_data = {k: v for k, v in data.items() if k in valid_keys}
-        return cls(**filtered_data)
+        # noinspection PyUnresolvedReferences
+        return {c.name: getattr(self, c.name) for c in self.__table__.columns}
 
 
 # ============================================================
