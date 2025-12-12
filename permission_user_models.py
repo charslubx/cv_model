@@ -6,18 +6,21 @@ FastAPI 模型转换 - PermissionUser
 from typing import Optional
 from datetime import datetime
 from pydantic import BaseModel, Field
-from sqlalchemy import Column, String, DateTime
-from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy import Column, String, DateTime, Integer
+from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.sql import func
 
+
 # SQLAlchemy Base
-Base = declarative_base()
+class DeclBase(DeclarativeBase):
+    """SQLAlchemy 声明式基类"""
+    pass
 
 
 # ============================================================
 # SQLAlchemy ORM 模型 (用于数据库操作)
 # ============================================================
-class PermissionUser(Base):
+class PermissionUser(DeclBase):
     """
     SQLAlchemy ORM 模型 - 对应 Django 的 models.Model
     用于实际的数据库操作
@@ -48,7 +51,7 @@ class PermissionUser(Base):
 
 
 # 如果使用自增 ID 作为主键，可以使用这个版本：
-class PermissionUserWithId(Base):
+class PermissionUserWithId(DeclBase):
     """
     带有自增 ID 的版本（如果需要独立主键）
     """
@@ -138,7 +141,7 @@ engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 # 创建所有表
-Base.metadata.create_all(bind=engine)
+DeclBase.metadata.create_all(bind=engine)
 
 
 # 2. FastAPI 路由示例

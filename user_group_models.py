@@ -6,16 +6,19 @@ FastAPI 模型转换
 from typing import Optional
 from pydantic import BaseModel, Field
 from sqlalchemy import Column, Integer, String
-from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import DeclarativeBase
+
 
 # SQLAlchemy Base
-Base = declarative_base()
+class DeclBase(DeclarativeBase):
+    """SQLAlchemy 声明式基类"""
+    pass
 
 
 # ============================================================
 # SQLAlchemy ORM 模型 (用于数据库操作)
 # ============================================================
-class UserGroup(Base):
+class UserGroup(DeclBase):
     """
     SQLAlchemy ORM 模型 - 对应 Django 的 models.Model
     用于实际的数据库操作
@@ -108,7 +111,7 @@ engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 # 创建所有表
-Base.metadata.create_all(bind=engine)
+DeclBase.metadata.create_all(bind=engine)
 
 
 # 2. FastAPI 路由示例
