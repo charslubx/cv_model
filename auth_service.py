@@ -1,9 +1,13 @@
 """
-认证服务类 - 从中间件迁移的认证逻辑
+认证服务类 - 纯Service实现，不依赖中间件
+
+从中间件迁移而来，所有认证逻辑封装在Service中
+在接口中通过依赖注入或直接调用使用
 """
 import time
 import socket
-from datetime import datetime
+import uuid
+from datetime import datetime, timedelta
 from typing import Optional
 from fastapi import Request
 import logging
@@ -15,11 +19,25 @@ class AuthService:
     """
     认证服务类
     
-    负责处理用户认证、创建、刷新等业务逻辑
-    从 HttpMiddleware 迁移而来
+    功能：
+    1. 从请求中获取REMOTE_USER
+    2. 认证用户或创建新用户
+    3. 刷新过期用户信息
+    4. 设置 request.state.user
+    
+    使用方式：
+        auth_service = AuthService(ldap_url, base_dn, timeout)
+        await auth_service.authenticate(request, db_session)
+        # request.state.user 已被自动设置
     """
     
-    def __init__(self, ldap_server_url: str, ldap_base_dn: str, ldap_timeout: int = 30):
+    def __init__(
+        self, 
+        ldap_server_url: str, 
+        ldap_base_dn: str, 
+        ldap_timeout: int = 30,
+        db_session_factory=None
+    ):
         """
         初始化认证服务
         
@@ -27,12 +45,14 @@ class AuthService:
             ldap_server_url: LDAP 服务器地址
             ldap_base_dn: LDAP Base DN
             ldap_timeout: LDAP 超时时间（秒）
+            db_session_factory: 数据库会话工厂（可选）
         """
         self.ldap_server_url = ldap_server_url
         self.ldap_base_dn = ldap_base_dn
         self.ldap_timeout = ldap_timeout
+        self.db_session_factory = db_session_factory
         
-        # 延迟初始化，避免在导入时就创建连接
+        # 延迟初始化
         self._auth_backend = None
         self._user_service = None
     
@@ -40,7 +60,8 @@ class AuthService:
     def auth_backend(self):
         """延迟初始化认证后端"""
         if self._auth_backend is None:
-            from user_backend import UserBackend  # 假设的导入路径
+            # TODO: 根据实际项目修改导入路径
+            from user_backend import UserBackend
             self._auth_backend = UserBackend(
                 ldap_server_url=self.ldap_server_url,
                 ldap_base_dn=self.ldap_base_dn,
@@ -52,7 +73,8 @@ class AuthService:
     def user_service(self):
         """延迟初始化用户服务"""
         if self._user_service is None:
-            from user_service import UserService  # 假设的导入路径
+            # TODO: 根据实际项目修改导入路径
+            from user_service import UserService
             self._user_service = UserService(
                 ldap_server_url=self.ldap_server_url,
                 ldap_base_dn=self.ldap_base_dn,
@@ -60,54 +82,96 @@ class AuthService:
             )
         return self._user_service
     
-    async def authenticate_user(self, request: Request, db_session) -> Optional[dict]:
+    async def authenticate(
+        self, 
+        request: Request, 
+        db_session=None
+    ) -> Optional[dict]:
         """
-        认证用户主流程
+        完整认证流程 - 主方法
         
+        自动执行：
         1. 从IIS获取REMOTE_USER
         2. 检查用户是否已认证
-        3. 如果未认证:
-           - 调用authenticate认证用户
-           - 如果认证失败，创建新用户
-           - 如果用户存在但超过30天未更新，刷新用户信息
-           - 登录用户
+        3. 认证或创建用户
+        4. 刷新过期信息
+        5. 设置 request.state.user
+        6. 更新登录时间
+        
+        Args:
+            request: FastAPI Request 对象
+            db_session: 数据库会话（可选，如果未提供则使用工厂创建）
+        
+        Returns:
+            认证后的用户对象，失败返回 None
+            
+        副作用：
+            - 设置 request.state.user
+            - 设置 request.state.idsid
+            - 设置 request.state.server_name
+        """
+        try:
+            # 使用传入的会话或创建新会话
+            if db_session is not None:
+                user = await self._do_authenticate(request, db_session)
+            elif self.db_session_factory is not None:
+                async with self.db_session_factory() as session:
+                    user = await self._do_authenticate(request, session)
+            else:
+                raise RuntimeError(
+                    "必须提供 db_session 参数或在初始化时提供 db_session_factory"
+                )
+            
+            # 设置 request.state
+            request.state.user = user
+            request.state.idsid = user.idsid if user and hasattr(user, 'idsid') else None
+            request.state.server_name = socket.gethostname()
+            
+            return user
+            
+        except Exception as e:
+            logger.error(f"Authentication failed: {e}")
+            logger.exception(e)
+            request.state.user = None
+            request.state.idsid = None
+            return None
+    
+    async def _do_authenticate(
+        self, 
+        request: Request, 
+        db_session
+    ) -> Optional[dict]:
+        """
+        执行认证的内部方法
         
         Args:
             request: FastAPI Request 对象
             db_session: 数据库会话
         
         Returns:
-            认证后的用户对象，如果认证失败则返回 None
+            用户对象或 None
         """
-        try:
-            # 获取REMOTE_USER
-            remote_user = self._get_remote_user(request)
-            
-            if not remote_user:
-                logger.warning("REMOTE_USER not found, skip authentication")
-                return None
-            
-            # 提取idsid和domain
-            idsid, domain = self.auth_backend._extract_idsid(remote_user)
-            
-            if not idsid:
-                logger.warning(f"Failed to extract idsid from REMOTE_USER: {remote_user}")
-                return None
-            
-            # 检查是否已认证且需要刷新
-            if hasattr(request.state, 'user') and request.state.user:
-                if await self.user_service.should_refresh_user(request.state.user):
-                    return await self.user_service.refresh_user(db_session, request.state.user)
-                return request.state.user
-            
-            # 未认证，开始认证流程
-            user = await self._authenticate_and_login(request, db_session, idsid, domain)
-            return user
-            
-        except Exception as e:
-            logger.error(f"Authentication service failed: {e}")
-            logger.exception(e)
+        # 1. 获取REMOTE_USER
+        remote_user = self.get_remote_user(request)
+        if not remote_user:
+            logger.warning("REMOTE_USER not found, skip authentication")
             return None
+        
+        # 2. 提取idsid和domain
+        idsid, domain = self.auth_backend._extract_idsid(remote_user)
+        if not idsid:
+            logger.warning(f"Failed to extract idsid from REMOTE_USER: {remote_user}")
+            return None
+        
+        # 3. 检查是否已认证且需要刷新
+        if hasattr(request.state, 'user') and request.state.user:
+            if await self.user_service.should_refresh_user(request.state.user):
+                return await self.user_service.refresh_user(db_session, request.state.user)
+            return request.state.user
+        
+        # 4. 未认证，开始认证流程
+        user = await self._authenticate_and_login(request, db_session, idsid, domain)
+        return user
     
     async def _authenticate_and_login(
         self, 
@@ -117,7 +181,13 @@ class AuthService:
         domain: str
     ) -> Optional[dict]:
         """
-        认证并登录用户的内部方法
+        认证并登录用户
+        
+        流程：
+        1. 尝试认证
+        2. 认证失败则创建新用户
+        3. 用户存在但过期则刷新
+        4. 登录用户（更新last_login）
         
         Args:
             request: FastAPI Request 对象
@@ -156,7 +226,11 @@ class AuthService:
             logger.exception(e)
             return None
     
-    async def refresh_user_if_needed(self, user, db_session) -> Optional[dict]:
+    async def refresh_user_if_needed(
+        self, 
+        user, 
+        db_session
+    ) -> Optional[dict]:
         """
         如果需要，刷新用户信息
         
@@ -176,9 +250,14 @@ class AuthService:
             return user
     
     @staticmethod
-    def _get_remote_user(request: Request) -> Optional[str]:
+    def get_remote_user(request: Request) -> Optional[str]:
         """
         从请求中获取 REMOTE_USER
+        
+        尝试从多个位置获取：
+        1. request.headers["REMOTE_USER"]
+        2. request.headers["X-Remote-User"]
+        3. request.scope["environ"]["REMOTE_USER"]
         
         Args:
             request: FastAPI Request 对象
@@ -186,56 +265,37 @@ class AuthService:
         Returns:
             REMOTE_USER 值或 None
         """
-        # 尝试从多个可能的位置获取 REMOTE_USER
+        # 从请求头获取
         remote_user = (
             request.headers.get("REMOTE_USER") or
-            request.headers.get("X-Remote-User") or
-            getattr(request.scope.get("environ", {}), "REMOTE_USER", None)
+            request.headers.get("X-Remote-User")
         )
-        return remote_user
-    
-    @staticmethod
-    def get_server_name() -> str:
-        """获取服务器主机名"""
-        return socket.gethostname()
-
-
-class RequestContextService:
-    """
-    请求上下文服务类
-    
-    负责管理请求ID、时间戳等上下文信息
-    """
-    
-    @staticmethod
-    def get_or_create_request_id(request: Request, prefix: str = "req-") -> str:
-        """
-        获取或创建 Request ID
         
-        Args:
-            request: FastAPI Request 对象
-            prefix: Request ID 前缀
+        if remote_user:
+            return remote_user
         
-        Returns:
-            Request ID
-        """
-        import uuid
-        request_id = request.headers.get("X-Request-ID")
-        if not request_id:
-            request_id = f"{prefix}{uuid.uuid4().hex}"
-        return request_id
+        # 从 environ 获取
+        try:
+            environ = request.scope.get("environ", {})
+            return environ.get("REMOTE_USER")
+        except Exception:
+            return None
     
     @staticmethod
-    def set_request_context(request: Request, request_id: str):
+    def set_request_context(request: Request, request_id: Optional[str] = None):
         """
         设置请求上下文信息
         
         Args:
             request: FastAPI Request 对象
-            request_id: Request ID
+            request_id: Request ID（可选，不提供则自动生成）
         """
+        if request_id is None:
+            request_id = f"req-{uuid.uuid4().hex}"
+        
         request.state.request_id = request_id
         request.state.start_time = datetime.utcnow()
+        request.state.server_name = socket.gethostname()
     
     @staticmethod
     def get_request_duration(request: Request) -> float:
@@ -255,49 +315,31 @@ class RequestContextService:
         return 0.0
 
 
-class ExceptionHandlerService:
+# ============================================
+# 便捷函数：用于依赖注入
+# ============================================
+
+def create_auth_service(
+    ldap_server_url: str,
+    ldap_base_dn: str,
+    ldap_timeout: int = 30,
+    db_session_factory=None
+) -> AuthService:
     """
-    异常处理服务类
-    """
+    创建认证服务实例的工厂函数
     
-    @staticmethod
-    async def handle_exception(
-        request: Request,
-        exc: Exception,
-        is_traceback: bool = True,
-    ):
-        """
-        处理异常并返回错误响应
-        
-        Args:
-            request: FastAPI Request 对象
-            exc: 异常对象
-            is_traceback: 是否打印堆栈跟踪
-        
-        Returns:
-            JSON 错误响应
-        """
-        from fastapi.responses import JSONResponse
-        
-        logger_func = logger.exception if is_traceback else logger.error
-        
-        # 构建错误日志消息
-        request_id = getattr(request.state, 'request_id', 'unknown')
-        log_msg = (
-            f'[{request_id}] - "{request.method} {request.url.path}" '
-            f'500 {type(exc).__name__}: {exc}'
-        )
-        logger_func(log_msg)
-        
-        # 返回错误响应
-        return JSONResponse(
-            status_code=500,
-            content={
-                "success": False,
-                "error": {
-                    "type": type(exc).__name__,
-                    "message": str(exc),
-                },
-                "request_id": request_id,
-            }
-        )
+    Args:
+        ldap_server_url: LDAP 服务器地址
+        ldap_base_dn: LDAP Base DN
+        ldap_timeout: LDAP 超时时间
+        db_session_factory: 数据库会话工厂
+    
+    Returns:
+        AuthService 实例
+    """
+    return AuthService(
+        ldap_server_url=ldap_server_url,
+        ldap_base_dn=ldap_base_dn,
+        ldap_timeout=ldap_timeout,
+        db_session_factory=db_session_factory
+    )
