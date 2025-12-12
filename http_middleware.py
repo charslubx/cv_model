@@ -160,28 +160,27 @@ class HttpMiddleware(BaseHTTPMiddleware):
         """
         获取数据库会话
         
-        这是一个占位方法，需要根据实际项目调整
-        例如：从 g.user_db_async_session() 或依赖注入获取
-        """
-        # 示例实现1：使用全局对象
-        try:
-            from globals import g  # 假设的导入
+        需要根据实际项目调整，例如：
+        - 从全局对象 g 获取
+        - 从数据库连接池获取
+        
+        示例1 - 使用全局对象:
+            from your_project.globals import g
             return g.user_db_async_session()
-        except ImportError:
-            pass
         
-        # 示例实现2：使用数据库连接池
-        try:
-            from database import get_async_session  # 假设的导入
-            async with get_async_session() as session:
+        示例2 - 使用 SQLAlchemy:
+            from your_project.database import async_session_maker
+            async with async_session_maker() as session:
                 yield session
-        except ImportError:
-            pass
+        """
+        # TODO: 在这里实现你的数据库会话获取逻辑
+        # 取消下面一行的注释并修改导入路径：
         
-        # 如果都失败，抛出异常
+        # from your_project.globals import g
+        # return g.user_db_async_session()
+        
         raise NotImplementedError(
-            "Database session not configured. "
-            "Please implement _get_db_session method."
+            "请在 http_middleware.py 的 _get_db_session() 方法中实现数据库会话获取逻辑"
         )
 
 
