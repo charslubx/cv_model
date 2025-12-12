@@ -21,7 +21,7 @@ class DictMixin:
     
     def to_dict(self) -> Dict[str, Any]:
         """
-        将模型实例转换为字典（简洁版本）
+        将模型实例转换为字典，自动处理 datetime 类型
         
         Returns:
             字典
@@ -30,9 +30,21 @@ class DictMixin:
             user = db.query(UserProfile).first()
             user_dict = user.to_dict()
             # {'id': 82, 'idsid': 'zhuqinyx', 'username': 'zhuqinyx'}
+            
+            permission = db.query(PermissionUser).first()
+            permission_dict = permission.to_dict()
+            # {'permission_id': 'PERM001', 'user_id': 'USER123',
+            #  'create_time': '2025-12-12T10:30:00', 'update_time': '2025-12-12T10:30:00'}
         """
-        # noinspection PyUnresolvedReferences
-        return {c.name: getattr(self, c.name) for c in self.__table__.columns}
+        result = {}
+        for c in self.__table__.columns:
+            value = getattr(self, c.name)
+            # 处理 datetime 类型，转换为字符串
+            if isinstance(value, datetime):
+                result[c.name] = str(value)  # 或使用 value.isoformat()
+            else:
+                result[c.name] = value
+        return result
 
 
 # ============================================================
