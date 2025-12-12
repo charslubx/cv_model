@@ -313,33 +313,3 @@ class AuthService:
             duration = (datetime.utcnow() - start_time).total_seconds()
             return duration
         return 0.0
-
-
-# ============================================
-# 便捷函数：用于依赖注入
-# ============================================
-
-def create_auth_service(
-    ldap_server_url: str,
-    ldap_base_dn: str,
-    ldap_timeout: int = 30,
-    db_session_factory=None
-) -> AuthService:
-    """
-    创建认证服务实例的工厂函数
-    
-    Args:
-        ldap_server_url: LDAP 服务器地址
-        ldap_base_dn: LDAP Base DN
-        ldap_timeout: LDAP 超时时间
-        db_session_factory: 数据库会话工厂
-    
-    Returns:
-        AuthService 实例
-    """
-    return AuthService(
-        ldap_server_url=ldap_server_url,
-        ldap_base_dn=ldap_base_dn,
-        ldap_timeout=ldap_timeout,
-        db_session_factory=db_session_factory
-    )
