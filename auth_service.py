@@ -7,7 +7,7 @@
 import time
 import socket
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from fastapi import Request
 import logging
@@ -294,7 +294,7 @@ class AuthService:
             request_id = f"req-{uuid.uuid4().hex}"
         
         request.state.request_id = request_id
-        request.state.start_time = datetime.utcnow()
+        request.state.start_time = datetime.now(timezone.utc)
         request.state.server_name = socket.gethostname()
     
     @staticmethod
@@ -310,6 +310,6 @@ class AuthService:
         """
         if hasattr(request.state, 'start_time'):
             start_time = request.state.start_time
-            duration = (datetime.utcnow() - start_time).total_seconds()
+            duration = (datetime.now(timezone.utc) - start_time).total_seconds()
             return duration
         return 0.0
