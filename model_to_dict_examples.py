@@ -143,19 +143,20 @@ class DictMixin:
         
         result = {}
         
-        # 获取所有列
-        for column in self.__table__.columns:
-            if column.name not in exclude:
-                value = getattr(self, column.name)
+        # 获取所有列 - 修正：使用 inspect 避免版本兼容问题
+        mapper = inspect(self.__class__)
+        for column in mapper.column_attrs:
+            if column.key not in exclude:
+                value = getattr(self, column.key)
                 # 处理 datetime 类型
                 if hasattr(value, 'isoformat'):
-                    result[column.name] = value.isoformat()
+                    result[column.key] = value.isoformat()
                 else:
-                    result[column.name] = value
+                    result[column.key] = value
         
         # 如果需要包含关系
         if include_relationships:
-            for relationship in inspect(self.__class__).relationships:
+            for relationship in mapper.relationships:
                 if relationship.key not in exclude:
                     related = getattr(self, relationship.key)
                     if related is not None:
