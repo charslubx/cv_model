@@ -8,7 +8,6 @@ import time
 import socket
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Optional
 from fastapi import Request
 import logging
 
@@ -86,7 +85,7 @@ class AuthService:
         self, 
         request: Request, 
         db_session=None
-    ) -> Optional[dict]:
+    ) -> dict | None:
         """
         完整认证流程 - 主方法
         
@@ -140,7 +139,7 @@ class AuthService:
         self, 
         request: Request, 
         db_session
-    ) -> Optional[dict]:
+    ) -> dict | None:
         """
         执行认证的内部方法
         
@@ -179,7 +178,7 @@ class AuthService:
         db_session, 
         idsid: str, 
         domain: str
-    ) -> Optional[dict]:
+    ) -> dict | None:
         """
         认证并登录用户
         
@@ -230,7 +229,7 @@ class AuthService:
         self, 
         user, 
         db_session
-    ) -> Optional[dict]:
+    ) -> dict | None:
         """
         如果需要，刷新用户信息
         
@@ -250,7 +249,7 @@ class AuthService:
             return user
     
     @staticmethod
-    def get_remote_user(request: Request) -> Optional[str]:
+    def get_remote_user(request: Request) -> str | None:
         """
         从请求中获取 REMOTE_USER
         
@@ -282,7 +281,7 @@ class AuthService:
             return None
     
     @staticmethod
-    def set_request_context(request: Request, request_id: Optional[str] = None):
+    def set_request_context(request: Request, request_id: str | None = None):
         """
         设置请求上下文信息
         

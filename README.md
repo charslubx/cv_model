@@ -1,5 +1,7 @@
 # 认证服务 - 纯Service实现
 
+> **Python 3.11+** - 使用现代 Python 特性（`type | None` 语法，timezone-aware datetime）
+
 ## 🎯 核心理念
 
 **不使用中间件，所有认证逻辑封装在Service中，在接口中通过依赖注入或直接调用使用。**
@@ -14,7 +16,22 @@
 |------|------|
 | `auth_service.py` | **认证服务类** - 封装所有认证逻辑 |
 | `使用示例.py` | **完整示例** - 3种使用方式 |
+| `PYTHON_311_特性.md` | Python 3.11 特性说明 |
 | `README.md` | 本文件 - 快速开始 |
+
+## ⚙️ 环境要求
+
+- **Python 3.11+** （推荐）或 **Python 3.10+** （最低）
+- FastAPI
+- Pydantic v2
+
+```bash
+# 检查 Python 版本
+python --version  # 需要 >= 3.10
+
+# 安装依赖
+pip install fastapi uvicorn pydantic
+```
 
 ---
 

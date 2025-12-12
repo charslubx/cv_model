@@ -5,7 +5,6 @@
 """
 from fastapi import FastAPI, Request, Depends
 from fastapi.responses import JSONResponse
-from typing import Optional
 
 from auth_service import AuthService
 
