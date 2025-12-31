@@ -363,7 +363,98 @@ async def bulk_update(
 
 
 # ============================================================================
-# 批量删除函数
+# 删除函数 - 支持复杂条件
+# ============================================================================
+
+async def delete(
+    session: AsyncSession,
+    model,
+    filter_by: Optional[dict] = None,
+    complex_filter: Any = None,
+) -> List[int]:
+    """
+    删除记录并返回被删除的 ID 列表
+    
+    参数：
+        session: 数据库会话
+        model: 数据库模型类
+        filter_by: 简单过滤条件字典，例如 {"category": "old"}
+        complex_filter: 复杂过滤条件，例如 model.id.in_([1, 2, 3])
+        
+    返回：
+        被删除的记录 ID 列表
+        
+    示例：
+        # 简单条件删除
+        deleted_ids = await delete(session, Product, filter_by={"category": "old"})
+        
+        # IN 条件删除
+        deleted_ids = await delete(
+            session, 
+            Product, 
+            complex_filter=Product.id.in_([1, 2, 3])
+        )
+        
+        # 复杂条件删除
+        deleted_ids = await delete(
+            session,
+            Product,
+            complex_filter=(Product.price < 10) & (Product.stock == 0)
+        )
+    """
+    from sqlalchemy import delete as delete_
+    
+    try:
+        # 构建删除语句
+        stmt = delete_(model)
+        
+        # 应用简单过滤条件
+        if filter_by:
+            stmt = stmt.filter_by(**filter_by)
+        
+        # 应用复杂过滤条件
+        if complex_filter is not None:
+            stmt = stmt.where(complex_filter)
+        
+        # 如果没有任何条件，抛出错误（防止误删全表）
+        if not filter_by and complex_filter is None:
+            raise ValueError("必须提供 filter_by 或 complex_filter，不允许删除全表")
+        
+        # PostgreSQL 支持 RETURNING，可以直接返回删除的 ID
+        if session.bind.dialect.name == "postgresql":
+            stmt = stmt.returning(model.id)
+            result = await session.execute(stmt)
+            deleted_ids = [row[0] for row in result.fetchall()]
+            await session.commit()
+        else:
+            # 其他数据库：先查询要删除的 ID，再执行删除
+            query_stmt = select(model.id)
+            
+            if filter_by:
+                query_stmt = query_stmt.filter_by(**filter_by)
+            
+            if complex_filter is not None:
+                query_stmt = query_stmt.where(complex_filter)
+            
+            # 查询要删除的 ID
+            result = await session.execute(query_stmt)
+            deleted_ids = list(result.scalars().all())
+            
+            # 如果有记录需要删除，执行删除
+            if deleted_ids:
+                await session.execute(stmt)
+            
+            await session.commit()
+        
+        return deleted_ids
+    
+    except Exception:
+        await session.rollback()
+        raise
+
+
+# ============================================================================
+# 批量删除函数（简化版本）
 # ============================================================================
 
 async def bulk_delete(
@@ -373,7 +464,7 @@ async def bulk_delete(
     ids: Optional[List[int]] = None
 ) -> int:
     """
-    批量删除记录
+    批量删除记录（简化版本，只返回删除数量）
     
     参数：
         session: 数据库会话
@@ -391,23 +482,15 @@ async def bulk_delete(
         # 按条件删除
         count = await bulk_delete(session, Product, filter_by={"category": "old"})
     """
-    from sqlalchemy import delete
-    
     try:
-        stmt = delete(model)
-        
         if ids:
-            stmt = stmt.where(model.id.in_(ids))
+            deleted_ids = await delete(session, model, complex_filter=model.id.in_(ids))
         elif filter_by:
-            for key, value in filter_by.items():
-                stmt = stmt.where(getattr(model, key) == value)
+            deleted_ids = await delete(session, model, filter_by=filter_by)
         else:
             raise ValueError("必须提供 ids 或 filter_by")
         
-        result = await session.execute(stmt)
-        await session.commit()
-        
-        return result.rowcount
+        return len(deleted_ids)
     
     except Exception:
         await session.rollback()
