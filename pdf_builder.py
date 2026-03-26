@@ -3,7 +3,7 @@ PDF 文档构建模块
 
 依赖：
   - reportlab  （前两页：表格/文字内容）
-  - pypdf      （合并 ReportLab PDF 与 matplotlib PDF，纯 Python，无系统库）
+  - pdfrw      （合并 ReportLab PDF 与 matplotlib PDF，纯 Python，无系统库，无 typing-extensions 依赖）
   - matplotlib （由 draw_spc_chart 生成真矢量 PDF 图表页）
 """
 import io
@@ -12,7 +12,7 @@ from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Table, TableStyle, Spacer, PageBreak
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.enums import TA_LEFT, TA_CENTER
-from pypdf import PdfWriter, PdfReader
+from pdfrw import PdfReader, PdfWriter
 
 BG_COLOR = colors.Color(235 / 255, 235 / 255, 249 / 255)
 DARK_BG  = colors.Color(0x2B / 255, 0x3D / 255, 0x28 / 255)
@@ -293,14 +293,14 @@ def build_pdf_with_charts(data, chart_pdf_bufs=None) -> bytes:
     writer = PdfWriter()
 
     # 写入 ReportLab 的前两页
-    for page in PdfReader(io.BytesIO(content_pdf)).pages:
-        writer.add_page(page)
+    for page in PdfReader(fdata=content_pdf).pages:
+        writer.addpage(page)
 
     # 追加每张图表（每个 pdf_buf 是 matplotlib 输出的单页 PDF）
     for pdf_buf in chart_pdf_bufs:
         pdf_buf.seek(0)
-        for page in PdfReader(pdf_buf).pages:
-            writer.add_page(page)
+        for page in PdfReader(fdata=pdf_buf.read()).pages:
+            writer.addpage(page)
 
     out = io.BytesIO()
     writer.write(out)
