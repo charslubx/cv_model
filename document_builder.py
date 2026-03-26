@@ -663,7 +663,9 @@ def _build_third_page(doc, chart_bufs, page_w_cm):
     used_ids = [int(s) for s in doc.element.xpath('//@id') if s.isdigit()]
     next_shape_id = (max(used_ids) + 1) if used_ids else 1
 
-    for idx, (svg_buf, png_buf) in enumerate(chart_bufs):
+    # 兼容 (svg, png) 和 (svg, png, pdf) 两种元组长度
+    for idx, bufs in enumerate(chart_bufs):
+        svg_buf, png_buf = bufs[0], bufs[1]
         svg_buf.seek(0)
         png_buf.seek(0)
         svg_bytes = svg_buf.read()
@@ -720,8 +722,8 @@ def build_document(data, spc_svg_bufs=None) -> bytes:
     ----
     data : dict
         文档内容数据字典。
-    spc_svg_bufs : (svg_buf, png_buf) 或 list[(svg_buf, png_buf)] 或 None
-        draw_spc_chart 返回的 (svg_buf, png_buf) 元组。
+    spc_svg_bufs : (svg_buf, png_buf, pdf_buf) 或 list[...] 或 None
+        draw_spc_chart 返回的三元组，docx 只使用前两个（svg/png）。
         传入时会在第三页插入对应图表，不传则不生成第三页。
     """
     doc = Document()
