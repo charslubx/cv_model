@@ -162,11 +162,16 @@ def draw_spc_chart(
     pad = (y_max - y_min) * 0.04
     ax.set_ylim(y_min - pad, y_max + pad)
 
-    buf = io.BytesIO()
-    fig.savefig(buf, format='svg')
+    svg_buf = io.BytesIO()
+    fig.savefig(svg_buf, format='svg')
+
+    png_buf = io.BytesIO()
+    fig.savefig(png_buf, format='png')
+
     plt.close(fig)
-    buf.seek(0)
-    return buf
+    svg_buf.seek(0)
+    png_buf.seek(0)
+    return svg_buf, png_buf
 
 
 if __name__ == '__main__':
@@ -192,7 +197,7 @@ if __name__ == '__main__':
          'ooc': None, 'clsr': None, 'oci': None, 'highlight_ooc': False},
     ]
 
-    buf = draw_spc_chart(
+    svg_buf, png_buf = draw_spc_chart(
         x_labels=x_labels,
         y_values=y_values,
         cl=-12.0, ucl=-10.5, lcl=-14.5,
@@ -202,5 +207,7 @@ if __name__ == '__main__':
     )
 
     with open('spc_chart_demo.svg', 'wb') as f:
-        f.write(buf.read())
-    print('已保存 spc_chart_demo.svg')
+        f.write(svg_buf.read())
+    with open('spc_chart_demo.png', 'wb') as f:
+        f.write(png_buf.read())
+    print('已保存 spc_chart_demo.svg / spc_chart_demo.png')

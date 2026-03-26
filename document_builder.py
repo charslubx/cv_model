@@ -1,5 +1,4 @@
 import io
-import uuid
 from docx import Document
 from docx.shared import Pt, Cm, RGBColor, Inches, Emu
 from docx.opc.constants import RELATIONSHIP_TYPE as RT
@@ -7,7 +6,6 @@ from docx.opc.part import Part
 from docx.opc.packuri import PackURI
 from docx.oxml.ns import qn, nsmap
 from docx.oxml import OxmlElement
-import cairosvg
 
 # SVG 关系类型（与 PNG/JPEG 相同，区别在于 content-type）
 _RT_IMAGE = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/image'
@@ -481,6 +479,18 @@ def _build_first_page(doc, data, page_w):
             _set_cell_shading(cell, '#FFFFFF')
 
 
+def _png_dimensions(png_bytes):
+    """从 PNG 二进制数据中解析宽度和高度，无需第三方库。
+
+    PNG 规范：文件头 8 字节签名 + IHDR chunk（4字节长度 + 4字节类型 + 13字节数据），
+    IHDR 数据前 4 字节为宽度，后 4 字节为高度，均为大端序 uint32。
+    """
+    import struct
+    # PNG 签名 8 字节，chunk 长度 4 字节，chunk 类型 4 字节，然后是 IHDR 数据
+    w, h = struct.unpack('>II', png_bytes[16:24])
+    return w, h
+
+
 def _add_svg_inline(doc_part, svg_bytes, png_bytes, width_emu, height_emu, shape_id, img_name):
     """
     构造一个 w:drawing/wp:inline 元素，以 SVG 作为矢量主体，PNG 作为降级备用。
@@ -629,43 +639,38 @@ def _add_svg_inline(doc_part, svg_bytes, png_bytes, width_emu, height_emu, shape
     return drawing
 
 
-def _build_third_page(doc, svg_bufs, page_w_cm):
+def _build_third_page(doc, chart_bufs, page_w_cm):
     """
-    将一个或多个 SVG buf（io.BytesIO）以矢量图形式插入第三页。
+    将一个或多个图表以 SVG 矢量图插入第三页，同时内嵌 PNG 供旧版 Word 降级。
 
-    Word 2016+ 直接渲染 SVG 矢量；旧版 Word 自动降级到同时内嵌的 PNG 位图。
-    两种格式均嵌入文档内部，无需外部依赖。
+    Word 2016+ 直接渲染 SVG 矢量；旧版 Word 自动回退到 PNG 位图。
+    所有内容均嵌入 docx 包内，无需任何系统级图形库（不依赖 cairosvg）。
 
     参数
     ----
-    svg_bufs : io.BytesIO 或 list[io.BytesIO]
-        draw_spc_chart 返回的 buf，可以是单个也可以是列表。
+    chart_bufs : (svg_buf, png_buf) 或 list[(svg_buf, png_buf)]
+        draw_spc_chart 返回的 (svg_buf, png_buf) 元组，可以是单个也可以是列表。
     page_w_cm : float
-        可用页宽（厘米），用于计算图片宽度（高度按 SVG viewBox 等比缩放）。
+        可用页宽（厘米），图片宽度撑满此值，高度按 PNG 宽高比等比缩放。
     """
-    if isinstance(svg_bufs, io.BytesIO):
-        svg_bufs = [svg_bufs]
+    if isinstance(chart_bufs, tuple):
+        chart_bufs = [chart_bufs]
 
     page_w_emu = int(page_w_cm / 2.54 * 914400)  # cm → EMU
 
-    doc_part = doc.part  # DocumentPart，用于注册关系
+    doc_part = doc.part
 
-    # 取当前文档中已用的最大 shape id，避免冲突
     used_ids = [int(s) for s in doc.element.xpath('//@id') if s.isdigit()]
     next_shape_id = (max(used_ids) + 1) if used_ids else 1
 
-    for idx, buf in enumerate(svg_bufs):
-        buf.seek(0)
-        svg_bytes = buf.read()
+    for idx, (svg_buf, png_buf) in enumerate(chart_bufs):
+        svg_buf.seek(0)
+        png_buf.seek(0)
+        svg_bytes = svg_buf.read()
+        png_bytes = png_buf.read()
 
-        # 生成 PNG 降级图（cairosvg 默认 96 dpi，尺寸足够）
-        png_bytes = cairosvg.svg2png(bytestring=svg_bytes)
-
-        # 从 PNG 尺寸推算 SVG 的宽高比，计算 EMU 高度
-        png_buf = io.BytesIO(png_bytes)
-        from PIL import Image as PILImage
-        pil_img = PILImage.open(png_buf)
-        px_w, px_h = pil_img.size
+        # 从 PNG 读取宽高比，计算 EMU 高度（无需 cairosvg，用标准库解析 PNG 头）
+        px_w, px_h = _png_dimensions(png_bytes)
         aspect = px_h / px_w if px_w else 1.0
         page_h_emu = int(page_w_emu * aspect)
 
@@ -715,8 +720,8 @@ def build_document(data, spc_svg_bufs=None) -> bytes:
     ----
     data : dict
         文档内容数据字典。
-    spc_svg_bufs : io.BytesIO 或 list[io.BytesIO] 或 None
-        draw_spc_chart 返回的 SVG buf。
+    spc_svg_bufs : (svg_buf, png_buf) 或 list[(svg_buf, png_buf)] 或 None
+        draw_spc_chart 返回的 (svg_buf, png_buf) 元组。
         传入时会在第三页插入对应图表，不传则不生成第三页。
     """
     doc = Document()
