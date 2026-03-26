@@ -317,11 +317,9 @@ def _last_page(data):
     el = [PageBreak()]
 
     # ── tbl1：Notes/Explanations ──
-    tbl_w = 9.75 * 2.45 * cm
-    col_ws = [tbl_w * 0.2, tbl_w * 0.8]
+    col_ws = [CW * 0.2, CW * 0.8]
 
     notes = data.get('notes', [{'index': '1', 'content': 'N/A'}])
-    # 第 0 行：合并表头；第 1..n 行：数据行
     t1_data = [[_p('Notes/Explanations', bold=True), '']]
     for note in notes:
         t1_data.append([
@@ -331,6 +329,7 @@ def _last_page(data):
 
     t1 = Table(t1_data, colWidths=col_ws,
                rowHeights=[0.7 * cm] + [0.7 * cm] * len(notes))
+    t1.hAlign = 'LEFT'
     t1.setStyle(TableStyle(_tbl_defaults() + [
         ('SPAN', (0, 0), (1, 0)),
         ('BACKGROUND', (0, 1), (-1, -1), WHITE),
@@ -344,8 +343,8 @@ def _last_page(data):
 
     conclusions = data.get('conclusions',
         'Proposed set of control limits are meeting the accept criteria')
-    t2 = Table([[_p(conclusions)]], colWidths=[tbl_w],
-               rowHeights=[0.7 * cm])
+    t2 = Table([[_p(conclusions)]], colWidths=[CW], rowHeights=[0.7 * cm])
+    t2.hAlign = 'LEFT'
     t2.setStyle(TableStyle(_tbl_defaults() + [
         ('BACKGROUND', (0, 0), (0, 0), WHITE),
     ]))
@@ -359,8 +358,8 @@ def _last_page(data):
     recommendations = data.get('recommendations',
         'To implement revised control limits for all affected sites'
         ' (A01, A04, A06, A15, A48, A90) and products to improve PCS indicators.')
-    t3 = Table([[_p(recommendations)]], colWidths=[tbl_w],
-               rowHeights=[0.7 * cm])
+    t3 = Table([[_p(recommendations)]], colWidths=[CW], rowHeights=[0.7 * cm])
+    t3.hAlign = 'LEFT'
     t3.setStyle(TableStyle(_tbl_defaults() + [
         ('BACKGROUND', (0, 0), (0, 0), WHITE),
     ]))
