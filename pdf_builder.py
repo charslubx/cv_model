@@ -13,6 +13,9 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Table, TableStyle, 
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.enums import TA_LEFT, TA_CENTER
 from pdfrw import PdfReader, PdfWriter
+from pdfrw.buildxobj import pagexobj
+from pdfrw.toreportlab import makerl
+from reportlab.platypus import Flowable
 
 BG_COLOR = colors.Color(235 / 255, 235 / 255, 249 / 255)
 DARK_BG  = colors.Color(0x2B / 255, 0x3D / 255, 0x28 / 255)
@@ -237,6 +240,78 @@ def _second_page(data):
     return el
 
 
+class _PdfImageFlowable(Flowable):
+    """
+    将 matplotlib 输出的单页 PDF 作为矢量 Form XObject 嵌入 ReportLab 页面。
+
+    pdfrw.pagexobj  把 PDF 页转成 XObject（保留所有矢量路径/字体）。
+    pdfrw.makerl    将 XObject 注册到 ReportLab canvas 的资源表。
+    draw()          以指定宽高把 XObject 绘制到当前位置。
+    """
+
+    def __init__(self, pdf_bytes, width, height=None):
+        Flowable.__init__(self)
+        page = PdfReader(fdata=pdf_bytes).pages[0]
+        self._xobj = pagexobj(page)
+
+        # PDF MediaBox 的原始宽高（pt）
+        mb = self._xobj.BBox
+        src_w = float(mb[2]) - float(mb[0])
+        src_h = float(mb[3]) - float(mb[1])
+
+        self.width = width
+        # 未指定高度时按原始宽高比等比缩放
+        self.height = height if height is not None else width * (src_h / src_w)
+        self._src_w = src_w
+        self._src_h = src_h
+
+    def draw(self):
+        canv = self.canv
+        rl_obj = makerl(canv, self._xobj)
+        sx = self.width / self._src_w
+        sy = self.height / self._src_h
+        canv.saveState()
+        canv.transform(sx, 0, 0, sy, 0, 0)
+        canv.doForm(rl_obj)
+        canv.restoreState()
+
+
+def _normalize_chart_bufs(chart_pdf_bufs):
+    """统一为 list[bytes]（兼容单 buf、三元组、列表三种形式）。"""
+    if chart_pdf_bufs is None:
+        return []
+    if isinstance(chart_pdf_bufs, io.BytesIO):
+        chart_pdf_bufs = [chart_pdf_bufs]
+    elif isinstance(chart_pdf_bufs, tuple):
+        chart_pdf_bufs = [chart_pdf_bufs[2]]
+    else:
+        normalized = []
+        for item in chart_pdf_bufs:
+            normalized.append(item[2] if isinstance(item, tuple) else item)
+        chart_pdf_bufs = normalized
+
+    result = []
+    for b in chart_pdf_bufs:
+        if isinstance(b, io.BytesIO):
+            b.seek(0)
+            result.append(b.read())
+        else:
+            result.append(bytes(b))
+    return result
+
+
+def _third_page(chart_pdf_bytes_list):
+    """
+    第三页元素：每张图表作为矢量 Flowable 嵌入，图宽撑满可用页宽，
+    高度按图表原始宽高比自动计算。
+    """
+    el = [PageBreak()]
+    for pdf_bytes in chart_pdf_bytes_list:
+        el.append(_PdfImageFlowable(pdf_bytes, width=CW))
+        el.append(Spacer(1, 6))
+    return el
+
+
 def build_pdf(data) -> bytes:
     """生成前两页（ReportLab 表格内容），返回 PDF bytes。"""
     buf = io.BytesIO()
@@ -258,50 +333,38 @@ def build_pdf(data) -> bytes:
 
 def build_pdf_with_charts(data, chart_pdf_bufs=None) -> bytes:
     """
-    生成完整 PDF（前两页 ReportLab + 可选的图表页）。
+    生成完整 PDF（第一页 + 第二页 + 可选的图表第三页）。
 
-    matplotlib 的 `fig.savefig(buf, format='pdf')` 输出真矢量 PDF，
-    用 pypdf 与 ReportLab 生成的前两页合并，无系统级依赖。
+    图表通过 pdfrw.pagexobj / makerl 作为矢量 Form XObject 嵌入 ReportLab
+    页面内容流，与背景色、页脚等页面装饰共存，图宽自动撑满可用页宽。
 
     参数
     ----
     data : dict
         文档内容数据字典。
-    chart_pdf_bufs : io.BytesIO 或 list[io.BytesIO] 或
-                     (svg, png, pdf) 元组 / 列表 或 None
-        draw_spc_chart 返回的三元组，或单独的 pdf_buf。
-        每个 buf 对应一页图表，追加在第三页及之后。
+    chart_pdf_bufs : (svg_buf, png_buf, pdf_buf) 或 list[...] 或
+                     io.BytesIO 或 None
+        draw_spc_chart 返回的三元组（取 pdf_buf），或直接传 pdf BytesIO。
+        不传则只生成前两页。
     """
-    content_pdf = build_pdf(data)
+    chart_bytes_list = _normalize_chart_bufs(chart_pdf_bufs)
 
-    if chart_pdf_bufs is None:
-        return content_pdf
+    flowables = _first_page(data) + _second_page(data)
+    if chart_bytes_list:
+        flowables += _third_page(chart_bytes_list)
 
-    # 统一为 list[io.BytesIO]（兼容单 buf、三元组、列表三种形式）
-    if isinstance(chart_pdf_bufs, io.BytesIO):
-        chart_pdf_bufs = [chart_pdf_bufs]
-    elif isinstance(chart_pdf_bufs, tuple):
-        # (svg_buf, png_buf, pdf_buf) 三元组 → 取第三个
-        chart_pdf_bufs = [chart_pdf_bufs[2]]
-    else:
-        # list：每个元素可能是 BytesIO 或 (svg, png, pdf) 三元组
-        normalized = []
-        for item in chart_pdf_bufs:
-            normalized.append(item[2] if isinstance(item, tuple) else item)
-        chart_pdf_bufs = normalized
-
-    writer = PdfWriter()
-
-    # 写入 ReportLab 的前两页
-    for page in PdfReader(fdata=content_pdf).pages:
-        writer.addpage(page)
-
-    # 追加每张图表（每个 pdf_buf 是 matplotlib 输出的单页 PDF）
-    for pdf_buf in chart_pdf_bufs:
-        pdf_buf.seek(0)
-        for page in PdfReader(fdata=pdf_buf.read()).pages:
-            writer.addpage(page)
-
-    out = io.BytesIO()
-    writer.write(out)
-    return out.getvalue()
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=(PAGE_W, PAGE_H),
+        leftMargin=MARGIN,
+        rightMargin=MARGIN,
+        topMargin=MARGIN,
+        bottomMargin=MARGIN * 1.5,
+    )
+    doc.build(
+        flowables,
+        onFirstPage=_page_callback,
+        onLaterPages=_page_callback
+    )
+    return buf.getvalue()
