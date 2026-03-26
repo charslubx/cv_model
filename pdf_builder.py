@@ -312,6 +312,63 @@ def _third_page(chart_pdf_bytes_list):
     return el
 
 
+def _last_page(data):
+    """最后一页：Notes/Explanations、17. Conclusions、18. Recommendations。"""
+    el = [PageBreak()]
+
+    # ── tbl1：Notes/Explanations ──
+    tbl_w = 9.75 * 2.45 * cm
+    col_ws = [tbl_w * 0.2, tbl_w * 0.8]
+
+    notes = data.get('notes', [{'index': '1', 'content': 'N/A'}])
+    # 第 0 行：合并表头；第 1..n 行：数据行
+    t1_data = [[_p('Notes/Explanations', bold=True), '']]
+    for note in notes:
+        t1_data.append([
+            _p(str(note.get('index', '')), bold=True),
+            _p(str(note.get('content', ''))),
+        ])
+
+    t1 = Table(t1_data, colWidths=col_ws,
+               rowHeights=[0.7 * cm] + [0.7 * cm] * len(notes))
+    t1.setStyle(TableStyle(_tbl_defaults() + [
+        ('SPAN', (0, 0), (1, 0)),
+        ('BACKGROUND', (0, 1), (-1, -1), WHITE),
+    ]))
+    el.append(t1)
+    el.append(Spacer(1, 4))
+
+    # ── 17. Conclusions ──
+    el.append(_p('17. Conclusions', bold=True))
+    el.append(Spacer(1, 2))
+
+    conclusions = data.get('conclusions',
+        'Proposed set of control limits are meeting the accept criteria')
+    t2 = Table([[_p(conclusions)]], colWidths=[tbl_w],
+               rowHeights=[0.7 * cm])
+    t2.setStyle(TableStyle(_tbl_defaults() + [
+        ('BACKGROUND', (0, 0), (0, 0), WHITE),
+    ]))
+    el.append(t2)
+    el.append(Spacer(1, 4))
+
+    # ── 18. Recommendations ──
+    el.append(_p('18. Recommendations', bold=True))
+    el.append(Spacer(1, 2))
+
+    recommendations = data.get('recommendations',
+        'To implement revised control limits for all affected sites'
+        ' (A01, A04, A06, A15, A48, A90) and products to improve PCS indicators.')
+    t3 = Table([[_p(recommendations)]], colWidths=[tbl_w],
+               rowHeights=[0.7 * cm])
+    t3.setStyle(TableStyle(_tbl_defaults() + [
+        ('BACKGROUND', (0, 0), (0, 0), WHITE),
+    ]))
+    el.append(t3)
+
+    return el
+
+
 def build_pdf(data) -> bytes:
     """生成前两页（ReportLab 表格内容），返回 PDF bytes。"""
     buf = io.BytesIO()
@@ -324,7 +381,7 @@ def build_pdf(data) -> bytes:
         bottomMargin=MARGIN * 1.5,
     )
     doc.build(
-        _first_page(data) + _second_page(data),
+        _first_page(data) + _second_page(data) + _last_page(data),
         onFirstPage=_page_callback,
         onLaterPages=_page_callback
     )
@@ -352,6 +409,7 @@ def build_pdf_with_charts(data, chart_pdf_bufs=None) -> bytes:
     flowables = _first_page(data) + _second_page(data)
     if chart_bytes_list:
         flowables += _third_page(chart_bytes_list)
+    flowables += _last_page(data)
 
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
