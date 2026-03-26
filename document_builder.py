@@ -1,10 +1,20 @@
 import io
+import uuid
 from docx import Document
-from docx.shared import Pt, Cm, RGBColor, Inches
+from docx.shared import Pt, Cm, RGBColor, Inches, Emu
 from docx.opc.constants import RELATIONSHIP_TYPE as RT
-from docx.oxml.ns import qn
+from docx.opc.part import Part
+from docx.opc.packuri import PackURI
+from docx.oxml.ns import qn, nsmap
 from docx.oxml import OxmlElement
 import cairosvg
+
+# SVG 关系类型（与 PNG/JPEG 相同，区别在于 content-type）
+_RT_IMAGE = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/image'
+# SVG blip 扩展 URI（Office 2016+）
+_SVG_BLIP_URI = '{96DAC541-7B7A-43D3-8B79-37D633B846F1}'
+# 必须同时存在的第一个 ext，标记"使用本地 DPI"
+_USE_LOCAL_DPI_URI = '{28A0092B-C50C-407E-A947-70E740481C1C}'
 
 
 def _set_run_font(run, font_name='Aptos', size_pt=10, bold=False, color=None):
@@ -471,41 +481,209 @@ def _build_first_page(doc, data, page_w):
             _set_cell_shading(cell, '#FFFFFF')
 
 
+def _add_svg_inline(doc_part, svg_bytes, png_bytes, width_emu, height_emu, shape_id, img_name):
+    """
+    构造一个 w:drawing/wp:inline 元素，以 SVG 作为矢量主体，PNG 作为降级备用。
+
+    Office 2016+ 通过 a:blip 上的扩展节点 (a:ext[@uri=SVG_BLIP_URI]/asvg:svgBlip)
+    识别矢量图；旧版 Word 回退到 a:blip[@r:embed=png_rId] 中的 PNG。
+
+    返回构造好的 lxml Element（w:drawing）。
+    """
+    # ── 1. 向 document part 注册 PNG part（降级用）──
+    png_partname = PackURI('/word/media/{}.png'.format(img_name))
+    png_part = Part(png_partname, 'image/png', png_bytes)
+    png_rId = doc_part.relate_to(png_part, _RT_IMAGE)
+
+    # ── 2. 向 document part 注册 SVG part ──
+    svg_partname = PackURI('/word/media/{}.svg'.format(img_name))
+    svg_part = Part(svg_partname, 'image/svg+xml', svg_bytes)
+    svg_rId = doc_part.relate_to(svg_part, _RT_IMAGE)
+
+    # ── 3. 构造 XML ──
+    # 命名空间前缀
+    NS_A    = 'http://schemas.openxmlformats.org/drawingml/2006/main'
+    NS_PIC  = 'http://schemas.openxmlformats.org/drawingml/2006/picture'
+    NS_WP   = 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing'
+    NS_R    = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+    NS_ASVG = 'http://schemas.microsoft.com/office/drawing/2016/SVG/main'
+
+    def _el(tag, ns=None):
+        return OxmlElement(tag) if ns is None else OxmlElement('{%s}%s' % (ns, tag.split(':')[-1]) if ':' in tag else tag)
+
+    def qn2(prefix, local):
+        _ns = {
+            'a': NS_A, 'pic': NS_PIC, 'wp': NS_WP,
+            'r': NS_R, 'asvg': NS_ASVG,
+        }
+        return '{%s}%s' % (_ns[prefix], local)
+
+    from lxml import etree as _etree
+
+    cx_str = str(width_emu)
+    cy_str = str(height_emu)
+
+    # w:drawing
+    drawing = OxmlElement('w:drawing')
+
+    # wp:inline
+    inline = OxmlElement('wp:inline')
+    inline.set('distT', '0'); inline.set('distB', '0')
+    inline.set('distL', '0'); inline.set('distR', '0')
+    drawing.append(inline)
+
+    # wp:extent
+    extent = OxmlElement('wp:extent')
+    extent.set('cx', cx_str); extent.set('cy', cy_str)
+    inline.append(extent)
+
+    # wp:effectExtent
+    ee = OxmlElement('wp:effectExtent')
+    for attr in ('l', 't', 'r', 'b'):
+        ee.set(attr, '0')
+    inline.append(ee)
+
+    # wp:docPr
+    docPr = OxmlElement('wp:docPr')
+    docPr.set('id', str(shape_id)); docPr.set('name', img_name)
+    inline.append(docPr)
+
+    # wp:cNvGraphicFramePr / a:graphicFrameLocks
+    cNvGfxPr = OxmlElement('wp:cNvGraphicFramePr')
+    gfl = OxmlElement('a:graphicFrameLocks')
+    gfl.set('noChangeAspect', '1')
+    cNvGfxPr.append(gfl)
+    inline.append(cNvGfxPr)
+
+    # a:graphic / a:graphicData
+    graphic = OxmlElement('a:graphic')
+    inline.append(graphic)
+
+    gdata = OxmlElement('a:graphicData')
+    gdata.set('uri', NS_PIC)
+    graphic.append(gdata)
+
+    # pic:pic
+    pic = OxmlElement('pic:pic')
+    gdata.append(pic)
+
+    # pic:nvPicPr
+    nvPicPr = OxmlElement('pic:nvPicPr')
+    pic.append(nvPicPr)
+
+    nvDp = OxmlElement('pic:cNvPr')
+    nvDp.set('id', '0'); nvDp.set('name', img_name)
+    nvPicPr.append(nvDp)
+
+    nvPicDp = OxmlElement('pic:cNvPicPr')
+    nvPicPr.append(nvPicDp)
+
+    # pic:blipFill
+    blipFill = OxmlElement('pic:blipFill')
+    pic.append(blipFill)
+
+    # a:blip  — r:embed 指向 PNG（降级），扩展节点指向 SVG（矢量）
+    blip = OxmlElement('a:blip')
+    blip.set(qn2('r', 'embed'), png_rId)
+    blipFill.append(blip)
+
+    # a:blip/a:extLst
+    extLst = OxmlElement('a:extLst')
+    blip.append(extLst)
+
+    # 第一个 ext：useLocalDpi（必须存在，否则 Word 不渲染 SVG）
+    ext1 = OxmlElement('a:ext')
+    ext1.set('uri', _USE_LOCAL_DPI_URI)
+    NS_A14 = 'http://schemas.microsoft.com/office/drawing/2010/main'
+    a14_useLocalDpi = _etree.SubElement(ext1, '{%s}useLocalDpi' % NS_A14)
+    a14_useLocalDpi.set('val', '0')
+    extLst.append(ext1)
+
+    # 第二个 ext：svgBlip（指向 SVG part）
+    ext2 = OxmlElement('a:ext')
+    ext2.set('uri', _SVG_BLIP_URI)
+    svgBlip = _etree.SubElement(ext2, '{%s}svgBlip' % NS_ASVG)
+    svgBlip.set(qn2('r', 'embed'), svg_rId)
+    extLst.append(ext2)
+
+    # a:stretch / a:fillRect
+    stretch = OxmlElement('a:stretch')
+    stretch.append(OxmlElement('a:fillRect'))
+    blipFill.append(stretch)
+
+    # pic:spPr
+    spPr = OxmlElement('pic:spPr')
+    pic.append(spPr)
+
+    xfrm = OxmlElement('a:xfrm')
+    off = OxmlElement('a:off'); off.set('x', '0'); off.set('y', '0')
+    ext = OxmlElement('a:ext'); ext.set('cx', cx_str); ext.set('cy', cy_str)
+    xfrm.append(off); xfrm.append(ext)
+    spPr.append(xfrm)
+
+    prstGeom = OxmlElement('a:prstGeom')
+    prstGeom.set('prst', 'rect')
+    prstGeom.append(OxmlElement('a:avLst'))
+    spPr.append(prstGeom)
+
+    return drawing
+
+
 def _build_third_page(doc, svg_bufs, page_w_cm):
     """
-    将一个或多个 SVG buf（io.BytesIO）插入第三页。
-    每张图转为 PNG 后以段落形式嵌入文档，图宽撑满可用页宽。
+    将一个或多个 SVG buf（io.BytesIO）以矢量图形式插入第三页。
+
+    Word 2016+ 直接渲染 SVG 矢量；旧版 Word 自动降级到同时内嵌的 PNG 位图。
+    两种格式均嵌入文档内部，无需外部依赖。
 
     参数
     ----
     svg_bufs : io.BytesIO 或 list[io.BytesIO]
         draw_spc_chart 返回的 buf，可以是单个也可以是列表。
     page_w_cm : float
-        可用页宽（厘米），用于计算图片宽度。
+        可用页宽（厘米），用于计算图片宽度（高度按 SVG viewBox 等比缩放）。
     """
     if isinstance(svg_bufs, io.BytesIO):
         svg_bufs = [svg_bufs]
 
-    # 页宽转换为像素（96 dpi 基准：1 inch = 96 px，1 cm ≈ 37.795 px）
-    # cairosvg 的 scale 参数相对于 SVG 自身尺寸缩放；
-    # 这里先转 PNG 后让 python-docx 按厘米尺寸插入，不依赖像素尺寸，所以
-    # 直接用默认分辨率转换即可，插入时再指定 width。
-    page_w_inches = page_w_cm / 2.54
+    page_w_emu = int(page_w_cm / 2.54 * 914400)  # cm → EMU
+
+    doc_part = doc.part  # DocumentPart，用于注册关系
+
+    # 取当前文档中已用的最大 shape id，避免冲突
+    used_ids = [int(s) for s in doc.element.xpath('//@id') if s.isdigit()]
+    next_shape_id = (max(used_ids) + 1) if used_ids else 1
 
     for idx, buf in enumerate(svg_bufs):
         buf.seek(0)
-        svg_data = buf.read()
+        svg_bytes = buf.read()
 
-        png_data = cairosvg.svg2png(bytestring=svg_data)
-        png_buf = io.BytesIO(png_data)
+        # 生成 PNG 降级图（cairosvg 默认 96 dpi，尺寸足够）
+        png_bytes = cairosvg.svg2png(bytestring=svg_bytes)
+
+        # 从 PNG 尺寸推算 SVG 的宽高比，计算 EMU 高度
+        png_buf = io.BytesIO(png_bytes)
+        from PIL import Image as PILImage
+        pil_img = PILImage.open(png_buf)
+        px_w, px_h = pil_img.size
+        aspect = px_h / px_w if px_w else 1.0
+        page_h_emu = int(page_w_emu * aspect)
+
+        img_name = 'spc_chart_{}'.format(idx)
+
+        drawing_el = _add_svg_inline(
+            doc_part, svg_bytes, png_bytes,
+            page_w_emu, page_h_emu,
+            next_shape_id + idx, img_name
+        )
 
         p = doc.add_paragraph()
         p.paragraph_format.space_before = Pt(0)
         p.paragraph_format.space_after = Pt(4)
-        p.alignment = 1  # CENTER
+        p.alignment = 1
 
         run = p.add_run()
-        run.add_picture(png_buf, width=Inches(page_w_inches))
+        run._r.append(drawing_el)
 
 
 def _apply_doc_settings(doc):
