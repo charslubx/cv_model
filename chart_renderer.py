@@ -25,11 +25,11 @@ CPU 密集任务，因此使用 multiprocessing.Pool（进程池）绕过 GIL。
 
 注意事项
 --------
-- Django / gunicorn 的 worker 必须使用 'fork' 或 'spawn' start method。
-  在模块顶层调用 multiprocessing.set_start_method() 可能引发冲突，
-  因此这里在 Pool 创建时通过 mp.get_context() 明确指定，不影响全局。
-- Windows 上 multiprocessing 要求入口有 if __name__ == '__main__' 保护，
-  在 Django view/service 调用时天然满足（不是 __main__），无需额外处理。
+- Linux/macOS 自动使用 'fork'：子进程复制父进程内存，matplotlib/numpy
+  已加载，无需重新 import，启动开销极低（< 5ms）。
+- Windows 自动使用 'spawn'：os.fork 不存在，必须重新启动解释器，
+  每个子进程需重新 import，启动开销约 1~2 秒。
+- 通过 mp.get_context() 指定，不调用 set_start_method()，不影响全局状态。
 - 子进程数量默认 = os.cpu_count()，可通过 max_workers 参数限制，
   避免在多租户服务器上占满所有核心。
 """
@@ -86,10 +86,10 @@ def render_charts_parallel(
         len(chart_params),
     )
 
-    # Django/gunicorn 生产环境用 'spawn'（避免 fork 后 DB 连接/信号泄露）
-    # 纯脚本/测试环境 Linux 可用 'fork'（更快，无需重新 import）
-    # 通过环境变量 CHART_MP_CONTEXT=fork 可强制切换，默认 spawn
-    ctx_name = os.environ.get('CHART_MP_CONTEXT', 'spawn')
+    # Linux/macOS 用 fork：子进程直接复制父进程内存，无需重新 import，启动快
+    # Windows 只支持 spawn（os.fork 不存在），强制使用 spawn
+    import sys
+    ctx_name = 'fork' if sys.platform != 'win32' else 'spawn'
     ctx = mp.get_context(ctx_name)
     with ctx.Pool(processes=n_workers) as pool:
         results = pool.map(_render_one, chart_params)

@@ -1,4 +1,4 @@
-import time, os, numpy as np
+import time, os, sys, numpy as np
 from chart_renderer import render_charts_parallel, render_charts_sequential
 
 def make_params(seed):
@@ -19,7 +19,8 @@ def make_params(seed):
 if __name__ == '__main__':
     N = 4
     params = [make_params(i) for i in range(N)]
-    print(f'CPU 核数: {os.cpu_count()}，渲染 {N} 张图')
+    ctx = 'fork' if sys.platform != 'win32' else 'spawn'
+    print(f'CPU 核数: {os.cpu_count()}，渲染 {N} 张图，multiprocessing context: {ctx}')
 
     t0 = time.perf_counter()
     seq_results = render_charts_sequential(params)
