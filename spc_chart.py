@@ -2,11 +2,14 @@ import io
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-import matplotlib.gridspec as gridspec
+# 不再 import pyplot（plt）：pyplot 维护全局状态（当前 figure、渲染器、字体缓存），
+# 多线程并发调用时全局状态互相污染，导致 freetype glyph 错误。
+# 改用纯面向对象接口：Figure + GridSpec + FigureCanvasAgg，无任何全局状态，线程安全。
+from matplotlib.figure import Figure
+from matplotlib.gridspec import GridSpec
+from matplotlib.backends.backend_agg import FigureCanvasAgg
 
-# 显式指定 DejaVu Sans——matplotlib 自带，跨平台必然存在，
-# 避免 Windows 字体缓存损坏时找不到字形（RuntimeError: Could not get glyph）
+# DejaVu Sans 随 matplotlib 打包，任何平台都存在，避免系统字体缺字形
 matplotlib.rcParams['font.family'] = 'sans-serif'
 matplotlib.rcParams['font.sans-serif'] = ['DejaVu Sans']
 
@@ -75,10 +78,13 @@ def draw_spc_chart(
 ):
     TABLE_H = 1.4
 
+    # Figure + FigureCanvasAgg：完全独立的实例，不经过 pyplot 全局状态，线程安全
+    fig = Figure(figsize=(fig_width_inch, fig_height_inch), dpi=dpi)
+    FigureCanvasAgg(fig)  # 绑定 Agg 渲染器，savefig 需要 canvas
+
     if table_rows:
         chart_h = fig_height_inch - TABLE_H
-        fig = plt.figure(figsize=(fig_width_inch, fig_height_inch), dpi=dpi)
-        gs = gridspec.GridSpec(
+        gs = GridSpec(
             2, 1, figure=fig,
             height_ratios=[TABLE_H, chart_h],
             hspace=0.18,
@@ -88,7 +94,7 @@ def draw_spc_chart(
         ax = fig.add_subplot(gs[1])
         _draw_summary_table(ax_tbl, table_rows)
     else:
-        fig, ax = plt.subplots(figsize=(fig_width_inch, fig_height_inch), dpi=dpi)
+        ax = fig.add_subplot(1, 1, 1)
 
     if chart_title:
         ax.text(
@@ -176,7 +182,8 @@ def draw_spc_chart(
     pdf_buf = io.BytesIO()
     fig.savefig(pdf_buf, format='pdf')
 
-    plt.close(fig)
+    # OO 接口无需 plt.close()：fig 不在 pyplot 全局注册表中，
+    # 函数返回后引用计数归零，GC 自动释放
     svg_buf.seek(0)
     png_buf.seek(0)
     pdf_buf.seek(0)
