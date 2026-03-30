@@ -1,10 +1,8 @@
 import io
+import threading
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
-# 不再 import pyplot（plt）：pyplot 维护全局状态（当前 figure、渲染器、字体缓存），
-# 多线程并发调用时全局状态互相污染，导致 freetype glyph 错误。
-# 改用纯面向对象接口：Figure + GridSpec + FigureCanvasAgg，无任何全局状态，线程安全。
 from matplotlib.figure import Figure
 from matplotlib.gridspec import GridSpec
 from matplotlib.backends.backend_agg import FigureCanvasAgg
@@ -12,6 +10,13 @@ from matplotlib.backends.backend_agg import FigureCanvasAgg
 # DejaVu Sans 随 matplotlib 打包，任何平台都存在，避免系统字体缺字形
 matplotlib.rcParams['font.family'] = 'sans-serif'
 matplotlib.rcParams['font.sans-serif'] = ['DejaVu Sans']
+
+# matplotlib 3.4 及以下版本中，TextToPath / freetype 字体对象是模块级全局单例。
+# 多线程并发调用 savefig(format='svg') 时会产生数据竞争，导致：
+#   RuntimeError: In set_text: Could not get glyph (error code 0x12)
+# 用模块级锁序列化 savefig 调用（仅锁渲染输出阶段，figure 构建阶段仍并发）。
+# matplotlib 3.5+ 已修复此问题，锁在新版本中几乎无额外开销（极短临界区）。
+_RENDER_LOCK = threading.Lock()
 
 
 def _draw_summary_table(ax, table_rows):
@@ -174,16 +179,15 @@ def draw_spc_chart(
     ax.set_ylim(y_min - pad, y_max + pad)
 
     svg_buf = io.BytesIO()
-    fig.savefig(svg_buf, format='svg')
-
     png_buf = io.BytesIO()
-    fig.savefig(png_buf, format='png')
-
     pdf_buf = io.BytesIO()
-    fig.savefig(pdf_buf, format='pdf')
 
-    # OO 接口无需 plt.close()：fig 不在 pyplot 全局注册表中，
-    # 函数返回后引用计数归零，GC 自动释放
+    # 序列化渲染输出：freetype 全局单例在 matplotlib <=3.4 中非线程安全
+    with _RENDER_LOCK:
+        fig.savefig(svg_buf, format='svg')
+        fig.savefig(png_buf, format='png')
+        fig.savefig(pdf_buf, format='pdf')
+
     svg_buf.seek(0)
     png_buf.seek(0)
     pdf_buf.seek(0)
