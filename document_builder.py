@@ -677,14 +677,15 @@ def _build_third_page(doc, chart_bufs, page_w_cm, captions=None):
             cp.paragraph_format.space_before = Pt(4)
             cp.paragraph_format.space_after = Pt(2)
             cp.alignment = 0
-            pPr = cp._p.get_or_add_pPr()
+            run = cp.add_run(caption)
+            _set_run_font(run, size_pt=14)
+            # run 级别 shd：只染文字本身背后，不影响整行空白区域
+            rPr = run._r.get_or_add_rPr()
             shd = OxmlElement('w:shd')
             shd.set(qn('w:val'), 'clear')
             shd.set(qn('w:color'), 'auto')
             shd.set(qn('w:fill'), 'FFFF00')
-            pPr.append(shd)
-            run = cp.add_run(caption)
-            _set_run_font(run, size_pt=14)
+            rPr.append(shd)
 
         svg_buf, png_buf = bufs[0], bufs[1]
         svg_buf.seek(0)
