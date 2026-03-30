@@ -300,15 +300,60 @@ def _normalize_chart_bufs(chart_pdf_bufs):
     return result
 
 
-def _third_page(chart_pdf_bytes_list):
+YELLOW = colors.Color(1, 1, 0)   # #FFFF00
+
+
+def _p_highlight(text, size=14, bold=True):
+    """黄色背景、指定字号的段落（对应 word rPr shd #FFFF00）。"""
+    style = ParagraphStyle(
+        'highlight',
+        fontName='Helvetica-Bold' if bold else 'Helvetica',
+        fontSize=size,
+        backColor=YELLOW,
+        leading=size * 1.3,
+        spaceBefore=0,
+        spaceAfter=2,
+    )
+    return Paragraph(str(text) if text else '', style)
+
+
+def _image_page(data, chart_pdf_bytes_list):
     """
-    第三页元素：每张图表作为矢量 Flowable 嵌入，图宽撑满可用页宽，
-    高度按图表原始宽高比自动计算。
+    图表页元素：INFO16 超链接、16. Summary of Results 标题、
+    monitor_set 黄色描述、各图表（每张图前可选 caption）。
+
+    对应 word build_document 中第三页的逻辑。
     """
     el = [PageBreak()]
-    for pdf_bytes in chart_pdf_bytes_list:
+
+    # INFO16 超链接
+    info16_url = data.get('info_url16',
+        'http://mfgreports.ch.intel.com/WP_Documentation/Word_Template/Section_16.htm')
+    el.append(_info_link(info16_url))
+    el.append(Spacer(1, 2))
+
+    # 16. Summary of Results
+    el.append(_p('16. Summary of Results', bold=True))
+    el.append(Spacer(1, 4))
+
+    # monitor_set 黄色描述（与 word 版对应）
+    monitor_set = data.get('monitor_set', '')
+    if monitor_set:
+        el.append(_p_highlight(monitor_set, size=14, bold=True))
+        el.append(Spacer(1, 4))
+
+    captions = data.get('chart_captions') or []
+
+    for idx, pdf_bytes in enumerate(chart_pdf_bytes_list):
+        # 每张图前的 caption（黄色背景 14pt）
+        caption = captions[idx] if idx < len(captions) else ''
+        if caption:
+            el.append(_p_highlight(caption, size=14, bold=True))
+            el.append(Spacer(1, 2))
+
         el.append(_PdfImageFlowable(pdf_bytes, width=CW))
-        el.append(Spacer(1, 6))
+        el.append(PageBreak())
+
     return el
 
 
@@ -382,7 +427,7 @@ def build_pdf(data) -> bytes:
     doc.build(
         _first_page(data) + _second_page(data) + _last_page(data),
         onFirstPage=_page_callback,
-        onLaterPages=_page_callback
+        onLaterPages=_page_callback,
     )
     return buf.getvalue()
 
@@ -407,7 +452,7 @@ def build_pdf_with_charts(data, chart_pdf_bufs=None) -> bytes:
 
     flowables = _first_page(data) + _second_page(data)
     if chart_bytes_list:
-        flowables += _third_page(chart_bytes_list)
+        flowables += _image_page(data, chart_bytes_list)
     flowables += _last_page(data)
 
     buf = io.BytesIO()
