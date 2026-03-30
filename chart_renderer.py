@@ -78,8 +78,10 @@ def render_charts_parallel(
         return []
 
     # 单张图无需起子进程，直接在当前进程渲染（节省 fork 开销 ~50ms）
+    # 注意：_render_one 返回 (bytes, bytes, bytes)，需与多张路径统一包成 BytesIO
     if len(chart_params) == 1:
-        return [_render_one(chart_params[0])]
+        svg, png, pdf = _render_one(chart_params[0])
+        return [(io.BytesIO(svg), io.BytesIO(png), io.BytesIO(pdf))]
 
     n_workers = min(
         max_workers or os.cpu_count() or 1,
