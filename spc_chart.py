@@ -19,6 +19,16 @@ matplotlib.rcParams['font.sans-serif'] = ['DejaVu Sans']
 _RENDER_LOCK = threading.Lock()
 
 
+def ensure_bytesio(buf):
+    """将 bytes 或 BytesIO 统一转为位于开头的 BytesIO。
+    用于防御 draw_spc_chart 副本版本不一致导致的 bytes/BytesIO 混用。
+    """
+    if isinstance(buf, (bytes, bytearray)):
+        return io.BytesIO(buf)
+    buf.seek(0)
+    return buf
+
+
 def _draw_summary_table(ax, table_rows):
     COLS = ['Reference', 'Total Lots', 'Lots Excluded', 'LCL', 'CL', 'UCL', 'OOC', 'CLSR', 'OCI', 'Process CPK']
     COL_W = [0.17, 0.09, 0.11, 0.09, 0.09, 0.09, 0.08, 0.10, 0.09, 0.09]
@@ -115,11 +125,10 @@ def draw_spc_chart(
     x_pos = np.array([label_to_pos[lbl] for lbl in x_labels])
     y_arr = np.asarray(y_values, dtype=float)
 
+    # 有控制限时以控制限为边界，无控制限时以 CL 充当该侧边界
     out = np.zeros(len(y_arr), dtype=bool)
-    if ucl is not None:
-        out |= (y_arr > ucl)
-    if lcl is not None:
-        out |= (y_arr < lcl)
+    out |= (y_arr > ucl) if ucl is not None else (y_arr > cl)
+    out |= (y_arr < lcl) if lcl is not None else (y_arr < cl)
 
     ax.scatter(x_pos[~out], y_arr[~out], color='#3399FF', s=18, zorder=3, linewidths=0)
     if out.any():
