@@ -5,6 +5,11 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 
+# 显式指定 DejaVu Sans——matplotlib 自带，跨平台必然存在，
+# 避免 Windows 字体缓存损坏时找不到字形（RuntimeError: Could not get glyph）
+matplotlib.rcParams['font.family'] = 'sans-serif'
+matplotlib.rcParams['font.sans-serif'] = ['DejaVu Sans']
+
 
 def _draw_summary_table(ax, table_rows):
     COLS = ['Reference', 'Total Lots', 'Lots Excluded', 'LCL', 'CL', 'UCL', 'OOC', 'CLSR', 'OCI', 'Process CPK']
