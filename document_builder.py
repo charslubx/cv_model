@@ -639,7 +639,7 @@ def _add_svg_inline(doc_part, svg_bytes, png_bytes, width_emu, height_emu, shape
     return drawing
 
 
-def _build_third_page(doc, chart_bufs, page_w_cm):
+def _build_third_page(doc, chart_bufs, page_w_cm, captions=None):
     """
     将一个或多个图表以 SVG 矢量图插入第三页，同时内嵌 PNG 供旧版 Word 降级。
 
@@ -648,13 +648,18 @@ def _build_third_page(doc, chart_bufs, page_w_cm):
 
     参数
     ----
-    chart_bufs : (svg_buf, png_buf) 或 list[(svg_buf, png_buf)]
-        draw_spc_chart 返回的 (svg_buf, png_buf) 元组，可以是单个也可以是列表。
+    chart_bufs : (svg_buf, png_buf) 或 list[(svg_buf, png_buf, ...)]
+        draw_spc_chart 返回的元组，可以是单个也可以是列表。
     page_w_cm : float
         可用页宽（厘米），图片宽度撑满此值，高度按 PNG 宽高比等比缩放。
+    captions : list[str] | None
+        每张图表前的描述文字列表，顺序与 chart_bufs 对应。
+        显示为黄色背景（#FFFF00）、14pt 字体的段落。
+        None 或对应位置为空字符串时不插入描述。
     """
     if isinstance(chart_bufs, tuple):
         chart_bufs = [chart_bufs]
+    captions = captions or []
 
     page_w_emu = int(page_w_cm / 2.54 * 914400)  # cm → EMU
 
@@ -665,6 +670,22 @@ def _build_third_page(doc, chart_bufs, page_w_cm):
 
     # 兼容 (svg, png) 和 (svg, png, pdf) 两种元组长度
     for idx, bufs in enumerate(chart_bufs):
+        # ── 图表前的描述段落（黄色背景，14pt）──
+        caption = captions[idx] if idx < len(captions) else ''
+        if caption:
+            cp = doc.add_paragraph()
+            cp.paragraph_format.space_before = Pt(4)
+            cp.paragraph_format.space_after = Pt(2)
+            cp.alignment = 0
+            pPr = cp._p.get_or_add_pPr()
+            shd = OxmlElement('w:shd')
+            shd.set(qn('w:val'), 'clear')
+            shd.set(qn('w:color'), 'auto')
+            shd.set(qn('w:fill'), 'FFFF00')
+            pPr.append(shd)
+            run = cp.add_run(caption)
+            _set_run_font(run, size_pt=14)
+
         svg_buf, png_buf = bufs[0], bufs[1]
         svg_buf.seek(0)
         png_buf.seek(0)
@@ -738,7 +759,8 @@ def build_document(data, spc_svg_bufs=None) -> bytes:
 
     if spc_svg_bufs is not None:
         doc.add_page_break()
-        _build_third_page(doc, spc_svg_bufs, page_w)
+        _build_third_page(doc, spc_svg_bufs, page_w,
+                          captions=data.get('chart_captions'))
 
     buf = io.BytesIO()
     doc.save(buf)
