@@ -40,13 +40,27 @@ import multiprocessing as mp
 from typing import List, Dict, Any, Tuple
 
 
+def _worker_init():
+    """
+    spawn 子进程初始化：Windows 上每个 worker 从零启动，需要先初始化
+    Django app registry，否则任何间接 import Django model 的模块都会抛
+    AppRegistryNotReady。
+    fork 子进程直接复制父进程内存，registry 已就绪，此函数是空操作。
+    """
+    try:
+        import django
+        django.setup()
+    except RuntimeError:
+        # setup() 在同一进程内被重复调用时抛 RuntimeError，忽略即可
+        pass
+
+
 def _render_one(params: Dict[str, Any]) -> Tuple[bytes, bytes, bytes]:
     """
     子进程入口：渲染单张图表，返回 (svg_bytes, png_bytes, pdf_bytes)。
 
     必须是模块级函数（不能是 lambda 或嵌套函数），才能被 pickle 跨进程传输。
     """
-    # 在子进程内部导入，避免主进程 import 时初始化 matplotlib backend 的竞争
     from spc_chart import draw_spc_chart
 
     svg_buf, png_buf, pdf_buf = draw_spc_chart(**params)
@@ -93,7 +107,9 @@ def render_charts_parallel(
     import sys
     ctx_name = 'fork' if sys.platform != 'win32' else 'spawn'
     ctx = mp.get_context(ctx_name)
-    with ctx.Pool(processes=n_workers) as pool:
+    # spawn 子进程需要 initializer 来初始化 Django app registry
+    initializer = _worker_init if ctx_name == 'spawn' else None
+    with ctx.Pool(processes=n_workers, initializer=initializer) as pool:
         results = pool.map(_render_one, chart_params)
 
     # 把 bytes 包回 BytesIO，与 draw_spc_chart 原始返回值接口一致
