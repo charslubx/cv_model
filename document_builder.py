@@ -776,3 +776,37 @@ def build_document(data, spc_svg_bufs=None) -> bytes:
     buf = io.BytesIO()
     doc.save(buf)
     return buf.getvalue()
+
+
+def build_spc_table_document(data) -> bytes:
+    """
+    单独生成只包含 SPC 汇总表格的 docx 文件。
+
+    参数
+    ----
+    data : dict
+        至少包含 'spc_rows' 键，格式与 build_document 相同。
+
+    返回
+    ----
+    bytes：可直接写入 .docx 文件或作为 HTTP 响应返回。
+    """
+    doc = Document()
+    _apply_doc_settings(doc)
+
+    page_w = 35.56 - 1.27 - 1.27
+    _build_spc_table(doc, data, page_w)
+
+    sp = doc.add_paragraph()
+    sp.paragraph_format.space_before = Pt(5)
+    sp.paragraph_format.space_after = Pt(0)
+
+    if data.get('source_ref') or data.get('table_description'):
+        _add_source_ref_table(
+            doc,
+            value=data.get('source_ref', data.get('table_description', '')),
+        )
+
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
