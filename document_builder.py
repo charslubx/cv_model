@@ -266,9 +266,9 @@ def _build_spc_table(doc, data, page_w_cm):
     fixed_headers = ['SPC area', 'Monitor set', 'Measurement set', 'Chart type', 'Control Limit Type']
     value_sub = ['LCL', 'CL', 'UCL', 'OCI', '%OOC']
 
-    fw_vals = [2, 2.5, 3.5, 1.6, 2.5]
+    fw_vals = [3, 4, 4.5, 2.5, 3.5]
     fw = [Cm(v) for v in fw_vals]
-    vw = Cm((page_w_cm - sum(fw_vals)) / 10)
+    vw = Cm((13.06 * 2.54 - sum(fw_vals)) / 10)
 
     spc_rows = data.get('spc_rows', [{}])
     tbl = doc.add_table(rows=2 + len(spc_rows), cols=15)
