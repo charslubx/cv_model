@@ -778,9 +778,95 @@ def build_document(data, spc_svg_bufs=None) -> bytes:
     return buf.getvalue()
 
 
+def _build_spc_table_simple(doc, data, page_w_cm):
+    """
+    单行表头 SPC 表格，无 Present value / Proposed value 合并分组。
+
+    列顺序：SPC area | Monitor set | Measurement set | Chart type | CL Type |
+             LCL | CL | UCL | OCI | %OOC | LCL | CL | UCL | OCI | %OOC
+    """
+    DARK_BG  = '2B3D28'
+    PINK_BG  = '77206d'
+    GREEN_BG = '3a7c22'
+    DARK_ROW = 'd1d1d1'
+    PINK_ROW = 'f2ceed'
+    GREEN_ROW = 'd9f2d0'
+    WHITE = RGBColor(0xFF, 0xFF, 0xFF)
+
+    fixed_headers = ['SPC area', 'Monitor set', 'Measurement set', 'Chart type', 'Control Limit Type']
+    value_sub = ['LCL', 'CL', 'UCL', 'OCI', '%OOC']
+
+    fw_inch = [1.5, 1.63, 1.75, 0.75, 1.1]
+    fw_twip = [int(v * 1440) for v in fw_inch]
+    fw = [Cm(t / 567) for t in fw_twip]
+    vw_twip = 945
+    total_twip = sum(fw_twip) + vw_twip * 10
+    vw = Cm(vw_twip / 567)
+
+    spc_rows = data.get('spc_rows', [{}])
+    tbl = doc.add_table(rows=1 + len(spc_rows), cols=15)
+    tbl.style = 'Table Grid'
+    tbl.autofit = False
+    _set_table_total_width(tbl, total_twip / 1440)
+
+    # ── 单行表头 ──
+    hdr_row = tbl.rows[0]
+    _set_row_height(hdr_row, 0.22 * 2.54)
+
+    for j, txt in enumerate(fixed_headers):
+        c = hdr_row.cells[j]
+        c.width = fw[j]
+        _set_cell_shading(c, DARK_BG)
+        _set_cell_valign(c, 'center')
+        p = c.paragraphs[0]
+        p.alignment = 1
+        run = p.add_run(txt)
+        _set_run_font(run, size_pt=10, bold=True, color=WHITE)
+
+    for k, txt in enumerate(value_sub):
+        for bg, offset in [(PINK_BG, 5), (GREEN_BG, 10)]:
+            c = hdr_row.cells[offset + k]
+            c.width = vw
+            _set_cell_shading(c, bg)
+            _set_cell_valign(c, 'center')
+            p = c.paragraphs[0]
+            p.alignment = 1
+            run = p.add_run(txt)
+            _set_run_font(run, size_pt=10, bold=True, color=WHITE)
+
+    # ── 数据行 ──
+    keys_fixed = ['spc_area', 'monitor_set', 'measurement_set', 'chart_type', 'control_limit_type']
+    keys_val   = ['lcl', 'cl', 'ucl', 'oci', 'ooc']
+
+    for i, rd in enumerate(spc_rows):
+        row = tbl.rows[1 + i]
+        _set_row_height(row, 0.24 * 2.54)
+
+        for j, key in enumerate(keys_fixed):
+            c = row.cells[j]
+            c.width = fw[j]
+            _cell_write(c, '' if rd.get(key) is None else str(rd.get(key)), size_pt=10)
+            _set_cell_shading(c, DARK_ROW)
+
+        for k, key in enumerate(keys_val):
+            cp = row.cells[5 + k]
+            cp.width = vw
+            val = rd.get('present_' + key)
+            _cell_write(cp, '' if val is None else str(val), size_pt=10)
+            _set_cell_shading(cp, PINK_ROW)
+
+            cq = row.cells[10 + k]
+            cq.width = vw
+            val = rd.get('proposed_' + key)
+            _cell_write(cq, '' if val is None else str(val), size_pt=10)
+            _set_cell_shading(cq, GREEN_ROW)
+
+    return tbl
+
+
 def build_spc_table_document(data) -> bytes:
     """
-    单独生成只包含 SPC 汇总表格的 docx 文件。
+    单独生成只包含 SPC 汇总表格的 docx 文件（单行表头，无 Present/Proposed 分组）。
 
     参数
     ----
@@ -795,7 +881,7 @@ def build_spc_table_document(data) -> bytes:
     _apply_doc_settings(doc)
 
     page_w = 35.56 - 1.27 - 1.27
-    _build_spc_table(doc, data, page_w)
+    _build_spc_table_simple(doc, data, page_w)
 
     sp = doc.add_paragraph()
     sp.paragraph_format.space_before = Pt(5)
