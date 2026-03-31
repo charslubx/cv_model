@@ -267,18 +267,22 @@ def _build_spc_table(doc, data, page_w_cm):
     fixed_headers = ['SPC area', 'Monitor set', 'Measurement set', 'Chart type', 'Control Limit Type']
     value_sub = ['LCL', 'CL', 'UCL', 'OCI', '%OOC']
 
-    # 固定列用 inch 定义，与 _set_table_total_width 的 13.06 inch 同单位，取整误差最小
-    # 总宽 13.06 inch，固定列占 6.5 inch，剩余 6.56 inch 均分给 10 个值列
-    fw_inch = [1.2, 1.6, 1.8, 1.0, 0.9]   # SPC area, Monitor set, Measurement set, Chart type, CL Type
-    fw = [Cm(v * 2.54) for v in fw_inch]
-    vw_inch = (13.06 - sum(fw_inch)) / 10
-    vw = Cm(vw_inch * 2.54)
+    # 固定列 twip（1 inch = 1440 twip，均为整数，无取整误差）
+    fw_inch = [1.2, 1.6, 1.8, 1.0, 0.9]
+    fw_twip = [int(v * 1440) for v in fw_inch]   # [1728, 2304, 2592, 1440, 1296]
+    fw = [Cm(t / 567) for t in fw_twip]
+
+    # 值列：剩余 twip 必须能被 10 整除 → 选 945 twip/列，表格总宽 = 9360+9450 = 18810 twip
+    vw_twip = 945
+    total_twip = sum(fw_twip) + vw_twip * 10   # 9360 + 9450 = 18810，精确无余量
+    vw = Cm(vw_twip / 567)
 
     spc_rows = data.get('spc_rows', [{}])
     tbl = doc.add_table(rows=2 + len(spc_rows), cols=15)
     tbl.style = 'Table Grid'
     tbl.autofit = False
-    _set_table_total_width(tbl, 13.06)
+    # 用精确 twip 值设置总宽，不再有小数
+    _set_table_total_width(tbl, total_twip / 1440)
 
     _set_row_height(tbl.rows[0], 0.22 * 2.54)
     for j, txt in enumerate(fixed_headers):
