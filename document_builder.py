@@ -77,7 +77,7 @@ def _cell_write(cell, text, valign='bottom', font_name='Aptos', size_pt=9, bold=
     para = cell.paragraphs[0]
     para.alignment = 0  # LEFT
 
-    run = para.add_run(text)
+    run = para.add_run('' if text is None else str(text))
     _set_run_font(run, font_name=font_name, size_pt=size_pt, bold=bold, color=color)
     return para
 
