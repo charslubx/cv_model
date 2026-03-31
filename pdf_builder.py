@@ -413,40 +413,17 @@ def _last_page(data):
     return el
 
 
-def build_pdf(data) -> bytes:
-    """生成前两页（ReportLab 表格内容），返回 PDF bytes。"""
-    buf = io.BytesIO()
-    doc = SimpleDocTemplate(
-        buf,
-        pagesize=(PAGE_W, PAGE_H),
-        leftMargin=MARGIN,
-        rightMargin=MARGIN,
-        topMargin=MARGIN,
-        bottomMargin=MARGIN * 1.5,
-    )
-    doc.build(
-        _first_page(data) + _second_page(data) + _last_page(data),
-        onFirstPage=_page_callback,
-        onLaterPages=_page_callback,
-    )
-    return buf.getvalue()
-
-
-def build_pdf_with_charts(data, chart_pdf_bufs=None) -> bytes:
+def build_pdf(data, chart_pdf_bufs=None) -> bytes:
     """
-    生成完整 PDF（第一页 + 第二页 + 可选的图表第三页）。
-
-    图表通过 pdfrw.pagexobj / makerl 作为矢量 Form XObject 嵌入 ReportLab
-    页面内容流，与背景色、页脚等页面装饰共存，图宽自动撑满可用页宽。
+    生成完整 PDF。
 
     参数
     ----
     data : dict
         文档内容数据字典。
-    chart_pdf_bufs : (svg_buf, png_buf, pdf_buf) 或 list[...] 或
-                     io.BytesIO 或 None
-        draw_spc_chart 返回的三元组（取 pdf_buf），或直接传 pdf BytesIO。
-        不传则只生成前两页。
+    chart_pdf_bufs : (svg_buf, png_buf, pdf_buf) 或 list[...] 或 None
+        draw_spc_chart 返回的三元组（取 pdf_buf）。
+        传入时在第二页后插入图表页，不传则跳过图表页。
     """
     chart_bytes_list = _normalize_chart_bufs(chart_pdf_bufs)
 
@@ -467,6 +444,10 @@ def build_pdf_with_charts(data, chart_pdf_bufs=None) -> bytes:
     doc.build(
         flowables,
         onFirstPage=_page_callback,
-        onLaterPages=_page_callback
+        onLaterPages=_page_callback,
     )
     return buf.getvalue()
+
+
+# 向后兼容别名
+build_pdf_with_charts = build_pdf
