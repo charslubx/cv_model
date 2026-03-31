@@ -541,3 +541,47 @@ def build_pdf(data, chart_pdf_bufs=None) -> bytes:
 
 # 向后兼容别名
 build_pdf_with_charts = build_pdf
+
+
+def save_document(
+    file_bytes: bytes,
+    filename: str,
+    app: str,
+    file_service,
+    generate_app_file_folder_path,
+    generate_id,
+) -> dict:
+    """
+    将已生成的文档字节保存到文件服务，返回 metadata。
+
+    参数
+    ----
+    file_bytes : bytes
+        build_pdf / build_spc_simple_table_pdf 返回的字节。
+    filename : str
+        目标文件名，如 'white_paper.pdf'。
+    app : str
+        应用标识，传给 generate_app_file_folder_path。
+    file_service : module / object
+        包含 save_file(file, file_path) -> (http_url, disk_path) 的服务。
+    generate_app_file_folder_path : callable
+        签名：(app) -> (sub_path, full_path)。
+    generate_id : callable
+        签名：() -> str，生成唯一随机文件名前缀。
+
+    返回
+    ----
+    dict with keys: http_url, disk_path, file_name
+    """
+    import os
+    file_path, _ = generate_app_file_folder_path(app)
+    _, file_ext = os.path.splitext(filename)
+    file_random_name = f'{generate_id()}{file_ext}'
+    http_url, disk_path = file_service.save_file(
+        file_bytes, os.path.join(file_path, file_random_name)
+    )
+    return {
+        'http_url': http_url,
+        'disk_path': disk_path,
+        'file_name': filename,
+    }
