@@ -304,17 +304,18 @@ YELLOW = colors.Color(1, 1, 0)   # #FFFF00
 
 
 def _p_highlight(text, size=14, bold=True):
-    """黄色背景、指定字号的段落（对应 word rPr shd #FFFF00）。"""
+    """仅文字有黄色背景（对应 word rPr shd #FFFF00），行尾空白不染色。"""
     style = ParagraphStyle(
         'highlight',
         fontName='Helvetica-Bold' if bold else 'Helvetica',
         fontSize=size,
-        backColor=YELLOW,
         leading=size * 1.3,
         spaceBefore=0,
         spaceAfter=2,
     )
-    return Paragraph(str(text) if text else '', style)
+    safe = str(text).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+    markup = '<font backColor="#FFFF00">{}</font>'.format(safe)
+    return Paragraph(markup, style)
 
 
 def _image_page(data, chart_pdf_bytes_list):
