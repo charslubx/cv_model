@@ -158,7 +158,7 @@ def _second_page(data):
     keys_fixed = ['spc_area', 'monitor_set', 'measurement_set', 'chart_type', 'control_limit_type']
     keys_val = ['lcl', 'cl', 'ucl', 'oci', 'ooc']
 
-    fw = [2 * cm, 2.5 * cm, 3.5 * cm, 1.6 * cm, 2.5 * cm]
+    fw = [3 * cm, 4 * cm, 4.5 * cm, 2.5 * cm, 3.5 * cm]
     vw = (13.06 * inch - sum(fw)) / 10
     spc_rows = data.get('spc_rows', [{}])
     n_data = max(len(spc_rows), 1)
