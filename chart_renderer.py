@@ -59,9 +59,20 @@ def _render_one(params: Dict[str, Any]) -> Tuple[bytes, bytes, bytes]:
     """
     子进程入口：渲染单张图表，返回 (svg_bytes, png_bytes, pdf_bytes)。
 
-    必须是模块级函数（不能是 lambda 或嵌套函数），才能被 pickle 跨进程传输。
+    必须是模块级函数且所在模块不能属于任何 Django app 包，否则 spawn
+    反序列化函数引用时会触发 Django model import → AppRegistryNotReady。
+
+    draw_spc_chart 的来源通过 params 里的两个保留键指定：
+      _draw_module : str  模块路径，默认 'spc_chart'
+      _draw_func   : str  函数名，  默认 'draw_spc_chart'
+    这两个键在传给 draw_spc_chart 之前会被弹出。
+    在此处 import（lazy），保证在 _worker_init 调用 django.setup() 之后执行。
     """
-    from spc_chart import draw_spc_chart
+    import importlib
+    params = dict(params)
+    module_path = params.pop('_draw_module', 'spc_chart')
+    func_name   = params.pop('_draw_func',   'draw_spc_chart')
+    draw_spc_chart = getattr(importlib.import_module(module_path), func_name)
 
     svg_buf, png_buf, pdf_buf = draw_spc_chart(**params)
     return svg_buf.read(), png_buf.read(), pdf_buf.read()
@@ -78,15 +89,16 @@ def render_charts_parallel(
     ----
     chart_params : list[dict]
         每个 dict 是传给 draw_spc_chart 的关键字参数。
+        如果 draw_spc_chart 定义在 Django app 包内，需额外传入：
+          _draw_module: 'api.custom.assembly_pcs.service.white_paper_images'
+          _draw_func:   'draw_spc_chart'
+        这两个键在进入子进程后会被弹出，不会传给实际函数。
     max_workers : int | None
-        最大并发进程数。None 表示使用所有 CPU 核心；
-        建议设置为 min(len(chart_params), os.cpu_count())，
-        避免任务数少于核数时浪费资源。
+        最大并发进程数。None 表示使用所有 CPU 核心。
 
     返回
     ----
-    list[(svg_bytes, png_bytes, pdf_bytes)]
-        顺序与 chart_params 一一对应。
+    list[(svg_buf, png_buf, pdf_buf)]  各元素为 io.BytesIO，顺序与 chart_params 一一对应。
     """
     if not chart_params:
         return []
