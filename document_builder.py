@@ -236,27 +236,6 @@ def _set_table_indent(tbl, indent_cm):
     tbl_pr.append(tbl_ind)
 
 
-def _set_tbl_grid(tbl, col_widths_twip):
-    """
-    写入 w:tblGrid，精确指定每列网格宽度（twip）。
-    没有 tblGrid 时 Word 会用最后一列吸收取整误差，导致末列偏宽。
-    """
-    tbl_elem = tbl._tbl
-    old = tbl_elem.find(qn('w:tblGrid'))
-    if old is not None:
-        tbl_elem.remove(old)
-    tbl_grid = OxmlElement('w:tblGrid')
-    for w in col_widths_twip:
-        gc = OxmlElement('w:gridCol')
-        gc.set(qn('w:w'), str(int(w)))
-        tbl_grid.append(gc)
-    # tblGrid 必须紧跟在 tblPr 之后
-    tbl_pr = tbl_elem.find(qn('w:tblPr'))
-    if tbl_pr is not None:
-        tbl_pr.addnext(tbl_grid)
-    else:
-        tbl_elem.insert(0, tbl_grid)
-
 
 def _set_table_total_width(tbl, width, _type="inch"):
     tbl_elem = tbl._tbl
@@ -288,27 +267,18 @@ def _build_spc_table(doc, data, page_w_cm):
     fixed_headers = ['SPC area', 'Monitor set', 'Measurement set', 'Chart type', 'Control Limit Type']
     value_sub = ['LCL', 'CL', 'UCL', 'OCI', '%OOC']
 
-    fw_vals = [3, 4, 4.5, 2.5, 3.5]
-    fw = [Cm(v) for v in fw_vals]
-    # vw 用 twip 整除后转回，与 grid 定义完全一致
-    _tbl_twip_tmp = int(13.06 * 1440)
-    _fw_twip_tmp  = [int(v * 567) for v in fw_vals]
-    vw = Cm((((_tbl_twip_tmp - sum(_fw_twip_tmp)) // 10) / 567))
-
-    # 精确 twip 值：1 inch = 1440 twip，1 cm = 567 twip
-    # 用总宽减去固定列后均分，最后一列补齐余量，避免 Word 自行拉宽
-    tbl_twip = int(13.06 * 1440)
-    fw_twip = [int(v * 567) for v in fw_vals]
-    vw_twip_exact = (tbl_twip - sum(fw_twip)) // 10
-    vw_twip_last  = tbl_twip - sum(fw_twip) - vw_twip_exact * 9
-    grid_widths = fw_twip + [vw_twip_exact] * 9 + [vw_twip_last]
+    # 固定列用 inch 定义，与 _set_table_total_width 的 13.06 inch 同单位，取整误差最小
+    # 总宽 13.06 inch，固定列占 6.5 inch，剩余 6.56 inch 均分给 10 个值列
+    fw_inch = [1.2, 1.6, 1.8, 1.0, 0.9]   # SPC area, Monitor set, Measurement set, Chart type, CL Type
+    fw = [Cm(v * 2.54) for v in fw_inch]
+    vw_inch = (13.06 - sum(fw_inch)) / 10
+    vw = Cm(vw_inch * 2.54)
 
     spc_rows = data.get('spc_rows', [{}])
     tbl = doc.add_table(rows=2 + len(spc_rows), cols=15)
     tbl.style = 'Table Grid'
     tbl.autofit = False
     _set_table_total_width(tbl, 13.06)
-    _set_tbl_grid(tbl, grid_widths)
 
     _set_row_height(tbl.rows[0], 0.22 * 2.54)
     for j, txt in enumerate(fixed_headers):
@@ -322,6 +292,7 @@ def _build_spc_table(doc, data, page_w_cm):
         _set_run_font(run, size_pt=10, bold=True, color=WHITE)
 
     pv = tbl.rows[0].cells[5].merge(tbl.rows[0].cells[9])
+    pv.width = vw * 5
     _set_cell_shading(pv, PINK_BG)
     _set_cell_valign(pv, 'center')
     p = pv.paragraphs[0]
@@ -330,6 +301,7 @@ def _build_spc_table(doc, data, page_w_cm):
     _set_run_font(run, size_pt=10, bold=True, color=WHITE)
 
     prv = tbl.rows[0].cells[10].merge(tbl.rows[0].cells[14])
+    prv.width = vw * 5
     _set_cell_shading(prv, GREEN_BG)
     _set_cell_valign(prv, 'center')
     p = prv.paragraphs[0]
