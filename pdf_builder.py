@@ -80,6 +80,95 @@ def _tbl_defaults():
     ]
 
 
+def build_spc_simple_table_pdf(spc_rows) -> bytes:
+    """
+    生成只包含单行表头 SPC 表格的 PDF，对应 docx _build_spc_table_simple。
+
+    参数
+    ----
+    spc_rows : list[dict]
+        每行包含键：measurement_set, subset, monitor_set,
+                    lcl, cl, ucl, ooc, clsr, cpk, oci
+
+    返回
+    ----
+    bytes：PDF 文件内容。
+    """
+    # 颜色
+    _DARK_BG  = colors.Color(0x2B/255, 0x3D/255, 0x28/255)
+    _PINK_BG  = colors.Color(0x77/255, 0x20/255, 0x6D/255)
+    _DARK_ROW = colors.Color(0xD1/255, 0xD1/255, 0xD1/255)
+    _PINK_ROW = colors.Color(0xF2/255, 0xCE/255, 0xED/255)
+
+    fixed_headers = ['Measurement set', 'Subset', 'Monitor set']
+    value_sub     = ['LCL', 'CL', 'UCL', 'OCI', 'CLSR', 'Process CPK', '%OOC']
+    keys_fixed    = ['measurement_set', 'subset', 'monitor_set']
+    keys_val      = ['lcl', 'cl', 'ucl', 'ooc', 'clsr', 'cpk', 'oci']
+
+    # 列宽（与 docx 版对应：twip → inch → ReportLab pt）
+    fw_inch = [2.0, 1.63, 1.75]
+    vw_inch = 945 / 1440   # 945 twip，与 docx 完全一致
+    fw_pt   = [v * inch for v in fw_inch]
+    vw_pt   = vw_inch * inch
+    col_widths = fw_pt + [vw_pt] * len(value_sub)
+
+    def _hw(t): return _p(t, size=10, bold=True, color=WHITE, align=TA_CENTER)
+    def _dc(t): return _p('' if t is None else str(t), size=10)
+
+    # 表头行
+    hdr = [_hw(h) for h in fixed_headers] + [_hw(v) for v in value_sub]
+
+    # 数据行
+    rows = [hdr]
+    for rd in (spc_rows or []):
+        row = [_dc(rd.get(k)) for k in keys_fixed]
+        row += [_dc(rd.get(k)) for k in keys_val]
+        rows.append(row)
+
+    n = max(len(spc_rows or []), 1)
+    hdr_h  = 0.22 * 2.54 * cm
+    data_h = 0.24 * 2.54 * cm
+
+    style_cmds = [
+        ('GRID',   (0, 0), (-1, -1), 0.5, BORDER),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('LEFTPADDING',   (0, 0), (-1, -1), 3),
+        ('RIGHTPADDING',  (0, 0), (-1, -1), 3),
+        ('TOPPADDING',    (0, 0), (-1, -1), 2),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
+        # 表头背景
+        ('BACKGROUND', (0, 0), (2, 0), _DARK_BG),
+        ('BACKGROUND', (3, 0), (-1, 0), _PINK_BG),
+    ]
+    for i in range(n):
+        r = 1 + i
+        style_cmds += [
+            ('BACKGROUND', (0, r), (2, r), _DARK_ROW),
+            ('BACKGROUND', (3, r), (-1, r), _PINK_ROW),
+        ]
+
+    tbl = Table(rows, colWidths=col_widths,
+                rowHeights=[hdr_h] + [data_h] * n)
+    tbl.hAlign = 'LEFT'
+    tbl.setStyle(TableStyle(style_cmds))
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=(PAGE_W, PAGE_H),
+        leftMargin=MARGIN,
+        rightMargin=MARGIN,
+        topMargin=MARGIN,
+        bottomMargin=MARGIN * 1.5,
+    )
+    doc.build(
+        [tbl],
+        onFirstPage=_page_callback,
+        onLaterPages=_page_callback,
+    )
+    return buf.getvalue()
+
+
 def _first_page(data):
     el = [
         _p('AT INTEGRATED CCB WP TEMPLATE', size=16, bold=True, align=TA_CENTER),
