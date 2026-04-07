@@ -5,6 +5,7 @@ import os
 import aiohttp
 import requests
 from asgiref.sync import async_to_sync
+from sqlalchemy import and_, select
 
 BATCH_SIZE = 100
 
@@ -50,3 +51,68 @@ def get_x_permissions():
         msg = f'Error happened while get x permissions. {e}'
         logger.error(msg)
         raise e
+
+
+@staticmethod
+async def get_permission_user_list(filter_by=None, params=None):
+    search_key = params.get('search_key') if params else None
+    filter_by = filter_by or {}
+
+    # 针对 PermissionUser 的等值条件（放入 JOIN ON 子句）
+    join_conditions = [PermissionList.permission_id == PermissionUser.permission_id]
+    # 针对 PermissionUser 的 IN 条件（同样放入 JOIN ON 子句）
+    join_in_conditions = []
+
+    if params:
+        for key, value in params.items():
+            if key == 'search_key':
+                continue
+            column = getattr(PermissionUser, key)
+            if isinstance(value, (list, tuple, set)):
+                join_in_conditions.append(column.in_(value))
+            else:
+                join_conditions.append(column == value)
+
+    async with g.db_async_session() as session:
+        permission_fields = [c.name for c in PermissionList.__table__.columns]
+        user_fields = [c.name for c in UserProfile.__table__.columns if c.name != 'password']
+
+        query = (
+            select(
+                *[getattr(PermissionList, f).label(f) for f in permission_fields],
+                *[getattr(UserProfile, f).label(f'user_col_{f}') for f in user_fields],
+            )
+            .select_from(PermissionList)
+            # 把所有 PermissionUser 过滤条件放进 ON，保证 LEFT JOIN 语义正确
+            .outerjoin(PermissionUser, and_(*join_conditions, *join_in_conditions))
+            .outerjoin(UserProfile, PermissionUser.user_id == UserProfile.idsid)
+        )
+
+        # search_key 针对主表，放 WHERE 没问题
+        if search_key:
+            query = query.filter(PermissionList.permission_name.ilike(f'%{search_key}%'))
+
+        # filter_by 若仍有针对 PermissionList 自身的条件可在此追加
+        if filter_by:
+            query = query.filter(
+                and_(*[getattr(PermissionList, k) == v for k, v in filter_by.items()])
+            )
+
+        result = await session.execute(query)
+        rows = result.mappings().fetchall()
+
+        permission_map: dict = {}
+        for row in rows:
+            perm_id = row['permission_id']
+            if perm_id not in permission_map:
+                permission_map[perm_id] = {
+                    **{f: row[f] for f in permission_fields},
+                    'users': [],
+                }
+            # user_id 为 None 说明该权限下无用户，不追加空行
+            if row.get('user_col_idsid') is not None:
+                permission_map[perm_id]['users'].append(
+                    {f: row[f'user_col_{f}'] for f in user_fields}
+                )
+
+        return list(permission_map.values())
