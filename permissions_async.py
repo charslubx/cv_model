@@ -54,6 +54,72 @@ def get_x_permissions():
 
 
 @staticmethod
+async def get_user_list(filter_by, params=None):
+    complex_conditions = []
+    search_key = params.get('search_key') if params else None
+
+    if params:
+        for key, value in params.items():
+            if key == 'search_key':
+                continue
+            column = getattr(PermissionUser, key)
+            if not isinstance(value, (list, tuple, set)):
+                filter_by[key] = value
+            elif isinstance(value, (list, tuple, set)):
+                complex_conditions.append(column.in_(value))
+
+    async with g.db_async_session() as session:
+        # 子查询：找出满足过滤条件的 user_id（逻辑不变）
+        subquery = select(PermissionUser.user_id)
+        if filter_by:
+            subquery = subquery.filter_by(**filter_by)
+        if complex_conditions:
+            subquery = subquery.filter(and_(*complex_conditions))
+
+        outer_conditions = [UserProfile.idsid.in_(subquery)]
+        if search_key:
+            outer_conditions.append(
+                or_(
+                    UserProfile.first_name.ilike(f'%{search_key}%'),
+                    UserProfile.last_name.ilike(f'%{search_key}%'),
+                )
+            )
+
+        user_fields = [c.name for c in UserProfile.__table__.columns if c.name != 'password']
+        permission_fields = [c.name for c in PermissionList.__table__.columns]
+
+        # 主查询：LEFT JOIN 拿每个用户的全量权限，不受过滤条件约束
+        query = (
+            select(
+                *[getattr(UserProfile, f).label(f) for f in user_fields],
+                *[getattr(PermissionList, f).label(f'perm_{f}') for f in permission_fields],
+            )
+            .select_from(UserProfile)
+            .outerjoin(PermissionUser, UserProfile.idsid == PermissionUser.user_id)
+            .outerjoin(PermissionList, PermissionUser.permission_id == PermissionList.permission_id)
+            .filter(and_(*outer_conditions))
+        )
+
+        result = await session.execute(query)
+        rows = result.mappings().fetchall()
+
+        user_map = {}
+        for row in rows:
+            uid = row['idsid']
+            if uid not in user_map:
+                user_map[uid] = {
+                    **{f: row[f] for f in user_fields},
+                    'permissions': [],
+                }
+            if row.get('perm_permission_id') is not None:
+                user_map[uid]['permissions'].append(
+                    {f: row[f'perm_{f}'] for f in permission_fields}
+                )
+
+        return list(user_map.values())
+
+
+@staticmethod
 async def get_permission_user_list(filter_by=None, params=None):
     search_key = params.get('search_key') if params else None
     filter_by = filter_by or {}
