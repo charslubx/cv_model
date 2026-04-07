@@ -72,27 +72,24 @@ async def get_user_list(filter_by, params=None):
         user_fields = [c.name for c in UserProfile.__table__.columns if c.name != 'password']
         permission_fields = [c.name for c in PermissionList.__table__.columns]
 
-        # 第一步：用 PermissionUser 筛选条件缩小 user_id 范围
-        user_id_subquery = select(PermissionUser.user_id.distinct())
-        if filter_by:
-            user_id_subquery = user_id_subquery.filter(
-                and_(*[getattr(PermissionUser, k) == v for k, v in filter_by.items()])
-            )
-        if complex_conditions:
-            user_id_subquery = user_id_subquery.filter(and_(*complex_conditions))
-
-        # 第二步：对筛出的用户，取其全量权限（重新 JOIN，不带筛选条件）
+        # PermissionUser 是绑定表，从它出发：
+        # 筛选条件决定哪些绑定有效 → 同时决定用户范围和权限范围
         query = (
             select(
                 *[getattr(UserProfile, f).label(f) for f in user_fields],
                 *[getattr(PermissionList, f).label(f'perm_{f}') for f in permission_fields],
             )
-            .select_from(UserProfile)
-            .join(PermissionUser, UserProfile.idsid == PermissionUser.user_id)
+            .select_from(PermissionUser)
+            .join(UserProfile, PermissionUser.user_id == UserProfile.idsid)
             .join(PermissionList, PermissionUser.permission_id == PermissionList.permission_id)
-            .filter(UserProfile.idsid.in_(user_id_subquery))
         )
 
+        if filter_by:
+            query = query.filter(
+                and_(*[getattr(PermissionUser, k) == v for k, v in filter_by.items()])
+            )
+        if complex_conditions:
+            query = query.filter(and_(*complex_conditions))
         if search_key:
             query = query.filter(
                 or_(
@@ -104,6 +101,7 @@ async def get_user_list(filter_by, params=None):
         result = await session.execute(query)
         rows = result.mappings().fetchall()
 
+        # 一对多聚合：同一用户的多条权限合并到 permissions 列表
         user_map = {}
         for row in rows:
             uid = row['idsid']
