@@ -69,36 +69,34 @@ async def get_user_list(filter_by, params=None):
                 complex_conditions.append(column.in_(value))
 
     async with g.db_async_session() as session:
-        # 子查询：找出满足过滤条件的 user_id（逻辑不变）
-        subquery = select(PermissionUser.user_id)
-        if filter_by:
-            subquery = subquery.filter_by(**filter_by)
-        if complex_conditions:
-            subquery = subquery.filter(and_(*complex_conditions))
-
-        outer_conditions = [UserProfile.idsid.in_(subquery)]
-        if search_key:
-            outer_conditions.append(
-                or_(
-                    UserProfile.first_name.ilike(f'%{search_key}%'),
-                    UserProfile.last_name.ilike(f'%{search_key}%'),
-                )
-            )
-
         user_fields = [c.name for c in UserProfile.__table__.columns if c.name != 'password']
         permission_fields = [c.name for c in PermissionList.__table__.columns]
 
-        # 主查询：LEFT JOIN 拿每个用户的全量权限，不受过滤条件约束
+        # 以 PermissionUser 为基准，直接 JOIN 用户和权限
         query = (
             select(
                 *[getattr(UserProfile, f).label(f) for f in user_fields],
                 *[getattr(PermissionList, f).label(f'perm_{f}') for f in permission_fields],
             )
-            .select_from(UserProfile)
-            .outerjoin(PermissionUser, UserProfile.idsid == PermissionUser.user_id)
-            .outerjoin(PermissionList, PermissionUser.permission_id == PermissionList.permission_id)
-            .filter(and_(*outer_conditions))
+            .select_from(PermissionUser)
+            .join(UserProfile, PermissionUser.user_id == UserProfile.idsid)
+            .join(PermissionList, PermissionUser.permission_id == PermissionList.permission_id)
         )
+
+        # PermissionUser 筛选条件
+        if filter_by:
+            query = query.filter(and_(*[getattr(PermissionUser, k) == v for k, v in filter_by.items()]))
+        if complex_conditions:
+            query = query.filter(and_(*complex_conditions))
+
+        # search_key 作用于 UserProfile
+        if search_key:
+            query = query.filter(
+                or_(
+                    UserProfile.first_name.ilike(f'%{search_key}%'),
+                    UserProfile.last_name.ilike(f'%{search_key}%'),
+                )
+            )
 
         result = await session.execute(query)
         rows = result.mappings().fetchall()
@@ -111,10 +109,9 @@ async def get_user_list(filter_by, params=None):
                     **{f: row[f] for f in user_fields},
                     'permissions': [],
                 }
-            if row.get('perm_permission_id') is not None:
-                user_map[uid]['permissions'].append(
-                    {f: row[f'perm_{f}'] for f in permission_fields}
-                )
+            user_map[uid]['permissions'].append(
+                {f: row[f'perm_{f}'] for f in permission_fields}
+            )
 
         return list(user_map.values())
 
