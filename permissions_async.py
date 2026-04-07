@@ -72,24 +72,27 @@ async def get_user_list(filter_by, params=None):
         user_fields = [c.name for c in UserProfile.__table__.columns if c.name != 'password']
         permission_fields = [c.name for c in PermissionList.__table__.columns]
 
-        # 以 PermissionUser 为基准，直接 JOIN 用户和权限
+        # 第一步：用 PermissionUser 筛选条件缩小 user_id 范围
+        user_id_subquery = select(PermissionUser.user_id.distinct())
+        if filter_by:
+            user_id_subquery = user_id_subquery.filter(
+                and_(*[getattr(PermissionUser, k) == v for k, v in filter_by.items()])
+            )
+        if complex_conditions:
+            user_id_subquery = user_id_subquery.filter(and_(*complex_conditions))
+
+        # 第二步：对筛出的用户，取其全量权限（重新 JOIN，不带筛选条件）
         query = (
             select(
                 *[getattr(UserProfile, f).label(f) for f in user_fields],
                 *[getattr(PermissionList, f).label(f'perm_{f}') for f in permission_fields],
             )
-            .select_from(PermissionUser)
-            .join(UserProfile, PermissionUser.user_id == UserProfile.idsid)
+            .select_from(UserProfile)
+            .join(PermissionUser, UserProfile.idsid == PermissionUser.user_id)
             .join(PermissionList, PermissionUser.permission_id == PermissionList.permission_id)
+            .filter(UserProfile.idsid.in_(user_id_subquery))
         )
 
-        # PermissionUser 筛选条件
-        if filter_by:
-            query = query.filter(and_(*[getattr(PermissionUser, k) == v for k, v in filter_by.items()]))
-        if complex_conditions:
-            query = query.filter(and_(*complex_conditions))
-
-        # search_key 作用于 UserProfile
         if search_key:
             query = query.filter(
                 or_(
