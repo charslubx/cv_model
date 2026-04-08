@@ -118,6 +118,28 @@ async def get_user_list(filter_by, params=None):
 
 
 @staticmethod
+async def create_permission_user(permission_user_list):
+    async with g.db_async_session() as session:
+        # 查出已存在的绑定关系
+        pairs = [(item["permission_id"], item["user_id"]) for item in permission_user_list]
+        existing = await session.execute(
+            select(PermissionUser.permission_id, PermissionUser.user_id).where(
+                tuple_(PermissionUser.permission_id, PermissionUser.user_id).in_(pairs)
+            )
+        )
+        existing_pairs = {(row.permission_id, row.user_id) for row in existing}
+
+        # 只插入不存在的
+        to_create = [
+            {"permission_id": item["permission_id"], "user_id": item["user_id"]}
+            for item in permission_user_list
+            if (item["permission_id"], item["user_id"]) not in existing_pairs
+        ]
+        if to_create:
+            await bulk_create(session, PermissionUser, to_create)
+
+
+@staticmethod
 async def get_permission_user_list(filter_by=None, params=None):
     search_key = params.get('search_key') if params else None
     filter_by = filter_by or {}
