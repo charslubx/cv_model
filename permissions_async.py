@@ -122,9 +122,16 @@ async def create_permission_user(permission_user_list):
     async with g.db_async_session() as session:
         # 查出已存在的绑定关系
         pairs = [(item["permission_id"], item["user_id"]) for item in permission_user_list]
+        # SQL Server 不支持 tuple IN 语法，改用 OR + AND 逐对匹配
         existing = await session.execute(
             select(PermissionUser.permission_id, PermissionUser.user_id).where(
-                tuple_(PermissionUser.permission_id, PermissionUser.user_id).in_(pairs)
+                or_(*[
+                    and_(
+                        PermissionUser.permission_id == pid,
+                        PermissionUser.user_id == uid,
+                    )
+                    for pid, uid in pairs
+                ])
             )
         )
         existing_pairs = {(row.permission_id, row.user_id) for row in existing}
