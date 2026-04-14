@@ -472,8 +472,11 @@ def _build_change_table(doc, data, page_w_cm):
     行数由每条记录的 limits 列表决定。
     """
     total_twip = int(page_w_cm / 2.54 * 1440)
-    col_twips = [int(0.4 * 1440), int(2.5 * 1440), int(3.2 * 1440)]
-    col_twips.append(total_twip - sum(col_twips))   # 剩余给最后一列
+    num_twip      = int(0.4 * 1440)   # # 列
+    present_twip  = int(2.2 * 1440)   # Present value
+    proposed_twip = int(2.2 * 1440)   # Proposed value
+    items_twip    = total_twip - num_twip - present_twip - proposed_twip  # Change items（剩余）
+    col_twips = [num_twip, items_twip, present_twip, proposed_twip]
 
     tbl = doc.add_table(rows=1, cols=4)
     tbl.style = 'Table Grid'
