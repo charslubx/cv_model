@@ -28,11 +28,12 @@ HEADER_BG = 'D3D3D3'   # 表头灰色背景
 # 底层工具函数（与 document_builder.py 风格一致）
 # ---------------------------------------------------------------------------
 
-def _set_run_font(run, font_name='Times New Roman', size_pt=11,
-                  bold=False, color=None, italic=False):
+def _set_run_font(run, font_name='Arial', size_pt=11,
+                  bold=False, color=None, italic=False, underline=False):
     run.bold = bold
     run.italic = italic
     run.font.size = Pt(size_pt)
+    run.font.underline = underline
     if color:
         run.font.color.rgb = color
     rPr = run._r.get_or_add_rPr()
@@ -103,7 +104,7 @@ def _set_table_indent(tbl, indent_cm):
 
 
 def _cell_write(cell, text, align=WD_ALIGN_PARAGRAPH.LEFT,
-                font_name='Times New Roman', size_pt=11,
+                font_name='Arial', size_pt=11,
                 bold=False, color=None, italic=False, valign='top'):
     """写入单元格文字"""
     _set_cell_valign(cell, valign)
@@ -116,7 +117,7 @@ def _cell_write(cell, text, align=WD_ALIGN_PARAGRAPH.LEFT,
     return para
 
 
-def _cell_add_line(cell, text, font_name='Times New Roman', size_pt=11,
+def _cell_add_line(cell, text, font_name='Arial', size_pt=11,
                    bold=False, color=None):
     """在单元格追加一个段落"""
     para = cell.add_paragraph()
@@ -128,15 +129,16 @@ def _cell_add_line(cell, text, font_name='Times New Roman', size_pt=11,
     return para
 
 
-def _para_add_run(para, text, font_name='Times New Roman', size_pt=11,
-                  bold=False, color=None, italic=False):
+def _para_add_run(para, text, font_name='Arial', size_pt=11,
+                  bold=False, color=None, italic=False, underline=False):
     run = para.add_run(text)
     _set_run_font(run, font_name=font_name, size_pt=size_pt,
-                  bold=bold, color=color, italic=italic)
+                  bold=bold, color=color, italic=italic, underline=underline)
     return run
 
 
 def _add_heading(doc, text, size_pt=11, space_before=6, space_after=4):
+    """1) 2) 这类标题1：加粗"""
     p = doc.add_paragraph()
     p.paragraph_format.space_before = Pt(space_before)
     p.paragraph_format.space_after = Pt(space_after)
@@ -145,18 +147,28 @@ def _add_heading(doc, text, size_pt=11, space_before=6, space_after=4):
     return p
 
 
+def _add_sub_heading(doc, text, size_pt=11, space_before=4, space_after=2):
+    """a) b) 这类标题2：正常粗细"""
+    p = doc.add_paragraph()
+    p.paragraph_format.space_before = Pt(space_before)
+    p.paragraph_format.space_after = Pt(space_after)
+    r = p.add_run(text)
+    _set_run_font(r, size_pt=size_pt)
+    return p
+
+
 # ---------------------------------------------------------------------------
 # 章节构建函数
 # ---------------------------------------------------------------------------
 
 def _build_title(doc):
-    """居中大标题"""
+    """居中大标题，加粗+下划线"""
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     p.paragraph_format.space_before = Pt(0)
     p.paragraph_format.space_after = Pt(12)
     r = p.add_run('WLA CCB Monitor Change White Paper')
-    _set_run_font(r, size_pt=16, bold=True)
+    _set_run_font(r, size_pt=16, bold=True, underline=True)
 
 
 def _build_section1(doc, data, page_w_cm):
@@ -253,7 +265,7 @@ def _build_section1(doc, data, page_w_cm):
 
 
 def _build_section2(doc, data):
-    """2) Date"""
+    """2) Date —— 标题1 加粗"""
     p = doc.add_paragraph()
     p.paragraph_format.space_before = Pt(10)
     p.paragraph_format.space_after = Pt(4)
@@ -266,9 +278,9 @@ def _build_section3(doc, data):
     _add_heading(doc, '3) Authorship', space_before=10)
 
     items = [
-        ('a.', 'Primary author: ',       data.get('primary_author', 'Yuan, Ji'),      True),
+        ('a.', 'Primary author: ',            data.get('primary_author', 'Yuan, Ji'), True),
         ('b.', 'Site (primary author only): ', data.get('site', 'CDDP'),              True),
-        ('c.', 'Co-author(s):',           data.get('co_authors', ''),                 False),
+        ('c.', 'Co-author(s):',               data.get('co_authors', ''),             False),
     ]
     for letter, label, value, blue in items:
         p = doc.add_paragraph()
@@ -276,14 +288,14 @@ def _build_section3(doc, data):
         p.paragraph_format.first_line_indent = Cm(-0.63)
         p.paragraph_format.space_before = Pt(1)
         p.paragraph_format.space_after = Pt(1)
-        _para_add_run(p, f'{letter}  ')
+        _para_add_run(p, f'{letter}  ')   # 标题2：普通粗细
         _para_add_run(p, label)
         if value:
             _para_add_run(p, value, bold=True, color=(BLUE if blue else None))
 
 
 def _build_section4(doc, data):
-    """4) Title of Change"""
+    """4) Title of Change —— 标题1 加粗"""
     p = doc.add_paragraph()
     p.paragraph_format.space_before = Pt(10)
     p.paragraph_format.space_after = Pt(4)
@@ -293,7 +305,7 @@ def _build_section4(doc, data):
 
 
 def _build_section5_header(doc, data):
-    """5) Change Description 文字说明部分（a/b/c）"""
+    """5) Change Description 标题1（加粗） + a/b/c 标题2（普通）"""
     _add_heading(doc, '5) Change Description:', space_before=10)
 
     sub_items = [
@@ -309,7 +321,7 @@ def _build_section5_header(doc, data):
         p.paragraph_format.first_line_indent = Cm(-0.63)
         p.paragraph_format.space_before = Pt(1)
         p.paragraph_format.space_after = Pt(1)
-        _para_add_run(p, f'{letter}  ')
+        _para_add_run(p, f'{letter}  ')   # 标题2：普通粗细
         _para_add_run(p, label)
         if value:
             _para_add_run(p, value, bold=True, color=BLUE)
@@ -411,6 +423,49 @@ def _build_change_table(doc, data, page_w_cm):
 # 文档组装
 # ---------------------------------------------------------------------------
 
+def _build_footer(doc, data):
+    """在第一个 section 的页脚写入三栏内容：左-中-右"""
+    sec = doc.sections[0]
+    footer = sec.footer
+    footer.is_linked_to_previous = False
+
+    # 清空已有段落
+    for p in footer.paragraphs:
+        p.clear()
+
+    fp = footer.paragraphs[0]
+    fp.paragraph_format.space_before = Pt(0)
+    fp.paragraph_format.space_after = Pt(0)
+
+    left_text   = data.get('footer_left',   'Intel Confidential')
+    center_text = data.get('footer_center', 'WLA CCB Monitor Change White Paper')
+    right_text  = data.get('footer_right',  'Rev 1.0')
+
+    # 利用制表符实现左-中-右三栏布局
+    # 段落格式：居中制表位 + 右对齐制表位
+    from docx.oxml import OxmlElement as _el
+    pPr = fp._p.get_or_add_pPr()
+    tabs = _el('w:tabs')
+
+    tab_center = _el('w:tab')
+    tab_center.set(qn('w:val'), 'center')
+    tab_center.set(qn('w:pos'), '4680')   # 约页面中央（9360 twip / 2）
+
+    tab_right = _el('w:tab')
+    tab_right.set(qn('w:val'), 'right')
+    tab_right.set(qn('w:pos'), '9360')    # 右边界
+
+    tabs.append(tab_center)
+    tabs.append(tab_right)
+    pPr.append(tabs)
+
+    _para_add_run(fp, left_text,   size_pt=9)
+    _para_add_run(fp, '\t',        size_pt=9)
+    _para_add_run(fp, center_text, size_pt=9)
+    _para_add_run(fp, '\t',        size_pt=9)
+    _para_add_run(fp, right_text,  size_pt=9)
+
+
 def _apply_doc_settings(doc, page_w_cm=21.59, page_h_cm=27.94):
     """页面设置（A4 竖向，2.54cm 边距）"""
     sec = doc.sections[0]
@@ -463,6 +518,7 @@ def build_wla_ccb_document(data: dict) -> bytes:
     _build_section4(doc, data)
     _build_section5_header(doc, data)
     _build_change_table(doc, data, page_w_cm)
+    _build_footer(doc, data)
 
     buf = io.BytesIO()
     doc.save(buf)
@@ -485,6 +541,9 @@ def main():
         'title_of_change': 'CD DGB chart limit change for CLSR flag',
         'equipment_tool_set': 'EUV_Tool_A / CEID-12345',
         'products_affected': 'All',
+        'footer_left':   'Intel Confidential',
+        'footer_center': 'WLA CCB Monitor Change White Paper',
+        'footer_right':  'Rev 1.0',
         'change_rows': [
             {
                 'number': '1',
