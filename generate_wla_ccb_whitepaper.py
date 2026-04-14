@@ -467,3 +467,67 @@ def build_wla_ccb_document(data: dict) -> bytes:
     buf = io.BytesIO()
     doc.save(buf)
     return buf.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# 测试入口
+# ---------------------------------------------------------------------------
+
+def main():
+    sample_data = {
+        'fwp_horizon': 'N/a',
+        'pccb_member': 'N/A',
+        'reference_wps': [{'horizon': 'N/a', 'title': 'N/a'}],
+        'date': '04/02/2026',
+        'primary_author': 'Yuan, Ji',
+        'site': 'CDDP',
+        'co_authors': '',
+        'title_of_change': 'CD DGB chart limit change for CLSR flag',
+        'equipment_tool_set': 'EUV_Tool_A / CEID-12345',
+        'products_affected': 'All',
+        'change_rows': [
+            {
+                'number': '1',
+                'monitor_set': 'MON_SET_001',
+                'measurement_set': 'MEAS_SET_001',
+                'chart_type': 'CLSR',
+                'present_ucl': '3.50', 'present_cl': '2.10', 'present_lcl': '0.70',
+                'present_clsr_flag': 'Flag',
+                'proposed_ucl': '3.80', 'proposed_cl': '2.20', 'proposed_lcl': '0.60',
+                'proposed_clsr_flag': '',
+            },
+            {
+                'number': '1',
+                'monitor_set': 'MON_SET_002',
+                'measurement_set': 'MEAS_SET_002',
+                'chart_type': 'CLSR',
+                'present_ucl': '4.00', 'present_cl': '2.50', 'present_lcl': '1.00',
+                'present_clsr_flag': 'Flag',
+                'proposed_ucl': '4.20', 'proposed_cl': '2.60', 'proposed_lcl': '1.00',
+                'proposed_clsr_flag': '',
+            },
+            {
+                'number': '1',
+                'monitor_set': 'MON_SET_003',
+                'measurement_set': 'MEAS_SET_003',
+                'chart_type': 'CLSR',
+                'present_ucl': '2.90', 'present_cl': '1.80', 'present_lcl': '0.70',
+                'present_clsr_flag': '',
+                'proposed_ucl': '3.10', 'proposed_cl': '1.90', 'proposed_lcl': '0.70',
+                'proposed_clsr_flag': '',
+            },
+        ],
+    }
+
+    docx_bytes = build_wla_ccb_document(sample_data)
+
+    output_path = 'WLA_CCB_Monitor_Change_White_Paper.docx'
+    with open(output_path, 'wb') as f:
+        f.write(docx_bytes)
+
+    print(f'字节长度: {len(docx_bytes):,}')
+    print(f'已写入: {output_path}')
+
+
+if __name__ == '__main__':
+    main()
