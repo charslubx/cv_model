@@ -327,16 +327,153 @@ def _build_section5_header(doc, data):
             _para_add_run(p, value, bold=True, color=BLUE)
 
 
+def _set_table_no_borders(tbl):
+    """去掉表格所有单元格边框（嵌套表格用）"""
+    tbl_elem = tbl._tbl
+    tbl_pr = tbl_elem.find(qn('w:tblPr'))
+    if tbl_pr is None:
+        tbl_pr = OxmlElement('w:tblPr')
+        tbl_elem.insert(0, tbl_pr)
+    tbl_borders = OxmlElement('w:tblBorders')
+    for side in ('top', 'left', 'bottom', 'right', 'insideH', 'insideV'):
+        el = OxmlElement(f'w:{side}')
+        el.set(qn('w:val'), 'none')
+        el.set(qn('w:sz'), '0')
+        el.set(qn('w:space'), '0')
+        el.set(qn('w:color'), 'auto')
+        tbl_borders.append(el)
+    old = tbl_pr.find(qn('w:tblBorders'))
+    if old is not None:
+        tbl_pr.remove(old)
+    tbl_pr.append(tbl_borders)
+
+
+def _set_cell_no_padding(cell):
+    """去掉单元格内边距，让嵌套表格紧贴边框"""
+    tc_pr = cell._tc.get_or_add_tcPr()
+    mar = OxmlElement('w:tcMar')
+    for side in ('top', 'left', 'bottom', 'right'):
+        el = OxmlElement(f'w:{side}')
+        el.set(qn('w:w'), '0')
+        el.set(qn('w:type'), 'dxa')
+        mar.append(el)
+    old = tc_pr.find(qn('w:tcMar'))
+    if old is not None:
+        tc_pr.remove(old)
+    tc_pr.append(mar)
+
+
+def _build_inner_value_table(doc, cell, limit_rows, cell_twip):
+    """
+    在外层单元格 cell 内嵌入一个 3 列无边框表格。
+
+    limit_rows : list of dict，每行包含：
+        label      str   第1列标签（如 'UCL'）
+        value      str   第3列数值
+        color      RGBColor | None   第3列文字颜色，None 表示默认黑色
+    cell_twip  : 外层单元格宽度（twip），用于计算内嵌表格总宽
+
+    内嵌表格列宽分配：label 45% | colon 10% | value 45%
+    """
+    n = len(limit_rows)
+    if n == 0:
+        return
+
+    label_twip  = int(cell_twip * 0.45)
+    colon_twip  = int(cell_twip * 0.10)
+    value_twip  = cell_twip - label_twip - colon_twip
+
+    # 在 doc body 临时创建表格，再移入 cell
+    nested = doc.add_table(rows=n, cols=3)
+    nested.style = 'Table Grid'
+    nested.autofit = False
+    _set_table_total_width(nested, cell_twip / 1440)
+    _set_table_no_borders(nested)
+
+    for i, row_data in enumerate(limit_rows):
+        nr = nested.rows[i]
+        _set_row_height(nr, 0.5)
+
+        c0 = nr.cells[0]
+        c0.width = Cm(label_twip / 567)
+        _set_cell_no_padding(c0)
+        _cell_write(c0, row_data.get('label', ''), size_pt=10, valign='center')
+
+        c1 = nr.cells[1]
+        c1.width = Cm(colon_twip / 567)
+        _set_cell_no_padding(c1)
+        _cell_write(c1, ':', size_pt=10,
+                    align=WD_ALIGN_PARAGRAPH.CENTER, valign='center')
+
+        c2 = nr.cells[2]
+        c2.width = Cm(value_twip / 567)
+        _set_cell_no_padding(c2)
+        val = row_data.get('value', '')
+        clr = row_data.get('color', None)
+        _cell_write(c2, val, size_pt=10, bold=bool(val),
+                    color=clr, valign='center')
+
+    # 从 body 摘出，插入 cell 的 tc 元素（放在末尾空段落之前）
+    nested_tbl_el = nested._tbl
+    nested_tbl_el.getparent().remove(nested_tbl_el)
+
+    tc = cell._tc
+    # tc 末尾须保留一个 w:p（OOXML 规范），把表格插到最后一个 p 之前
+    last_p = tc.findall(qn('w:p'))[-1]
+    tc.insert(list(tc).index(last_p), nested_tbl_el)
+
+
+def _limits_from_rec(rec, prefix):
+    """
+    从 change_row 记录中提取某个前缀（present / proposed）的 limit_rows。
+
+    优先读取 rec['limits'] 列表（每项含 label / present / proposed）；
+    若无则退化到旧式扁平键（{prefix}_ucl / {prefix}_cl 等）。
+
+    返回 list of {'label', 'value', 'color'}
+    """
+    if 'limits' in rec:
+        rows = []
+        for item in rec['limits']:
+            val = item.get(prefix, '')
+            is_flag = item.get(f'{prefix}_is_flag', False)
+            rows.append({
+                'label': item.get('label', ''),
+                'value': val,
+                'color': GREEN if (is_flag and val) else (BLUE if val else None),
+            })
+        return rows
+
+    # 旧式键退化兼容
+    default_limits = [
+        ('UCL',        f'{prefix}_ucl',       False),
+        ('Centerline', f'{prefix}_cl',        False),
+        ('LCL',        f'{prefix}_lcl',       False),
+        ('CLSR',       f'{prefix}_clsr_flag', True),
+    ]
+    rows = []
+    for label, key, is_flag in default_limits:
+        val = rec.get(key, '')
+        rows.append({
+            'label': label,
+            'value': val,
+            'color': GREEN if (is_flag and val) else (BLUE if val else None),
+        })
+    return rows
+
+
 def _build_change_table(doc, data, page_w_cm):
     """
     5c) 变更项目表格
 
-    列宽（twip，合计精确等于 page_w_cm 对应 twip）：
-      #(0.4in) | Change items(2.5in) | Present value(3.2in) | Proposed value(3.2in)
+    列宽（twip）：# | Change items | Present value | Proposed value
+    Present / Proposed 列内部各放一个 3×n 无边框嵌套表格：
+        label | : | value
+    行数由每条记录的 limits 列表决定。
     """
     total_twip = int(page_w_cm / 2.54 * 1440)
     col_twips = [int(0.4 * 1440), int(2.5 * 1440), int(3.2 * 1440)]
-    col_twips.append(total_twip - sum(col_twips))   # 剩余全给最后一列
+    col_twips.append(total_twip - sum(col_twips))   # 剩余给最后一列
 
     tbl = doc.add_table(rows=1, cols=4)
     tbl.style = 'Table Grid'
@@ -357,17 +494,14 @@ def _build_change_table(doc, data, page_w_cm):
     change_rows = data.get('change_rows', [])
     for rec in change_rows:
         row = tbl.add_row()
-        _set_row_height(row, 1.8)
-        row.cells[0].width = Cm(col_twips[0] / 567)
-        row.cells[1].width = Cm(col_twips[1] / 567)
-        row.cells[2].width = Cm(col_twips[2] / 567)
-        row.cells[3].width = Cm(col_twips[3] / 567)
+        for j, tw in enumerate(col_twips):
+            row.cells[j].width = Cm(tw / 567)
 
         # Col 0: 序号
         _cell_write(row.cells[0], rec.get('number', '1'),
                     align=WD_ALIGN_PARAGRAPH.CENTER, valign='top')
 
-        # Col 1: Change items（三行）
+        # Col 1: Change items（Monitor set / Measurement set / Chart type）
         c1 = row.cells[1]
         _cell_write(c1, '', valign='top')
         p = c1.paragraphs[0]
@@ -388,33 +522,13 @@ def _build_change_table(doc, data, page_w_cm):
         _para_add_run(p3, 'Chart type: ')
         _para_add_run(p3, rec.get('chart_type', 'CLSR'), bold=True, color=BLUE)
 
-        # Col 2 & Col 3: Present / Proposed value（UCL / Centerline / LCL / CLSR flag）
+        # Col 2 & Col 3: 嵌套 3×n 表格
         for col_idx, prefix in [(2, 'present'), (3, 'proposed')]:
             cv = row.cells[col_idx]
-            _cell_write(cv, '', valign='top')
-
-            limit_keys = [
-                ('UCL',        f'{prefix}_ucl'),
-                ('Centerline', f'{prefix}_cl'),
-                ('LCL',        f'{prefix}_lcl'),
-            ]
-            first = True
-            for label, key in limit_keys:
-                p = cv.paragraphs[0] if first else cv.add_paragraph()
-                first = False
-                p.paragraph_format.space_before = Pt(1)
-                p.paragraph_format.space_after = Pt(2)
-                _para_add_run(p, f'{label}  :  ')
-                _para_add_run(p, rec.get(key, ''), bold=True, color=BLUE)
-
-            # CLSR flag 行
-            p_clsr = cv.add_paragraph()
-            p_clsr.paragraph_format.space_before = Pt(2)
-            p_clsr.paragraph_format.space_after = Pt(1)
-            _para_add_run(p_clsr, 'CLSR  :  ')
-            flag_val = rec.get(f'{prefix}_clsr_flag', '')
-            if flag_val:
-                _para_add_run(p_clsr, flag_val, bold=True, color=GREEN)
+            _set_cell_valign(cv, 'top')
+            cv.text = ''                          # 清空，保留末尾空 p
+            limit_rows = _limits_from_rec(rec, prefix)
+            _build_inner_value_table(doc, cv, limit_rows, col_twips[col_idx])
 
     return tbl
 
@@ -550,30 +664,38 @@ def main():
                 'monitor_set': 'MON_SET_001',
                 'measurement_set': 'MEAS_SET_001',
                 'chart_type': 'CLSR',
-                'present_ucl': '3.50', 'present_cl': '2.10', 'present_lcl': '0.70',
-                'present_clsr_flag': 'Flag',
-                'proposed_ucl': '3.80', 'proposed_cl': '2.20', 'proposed_lcl': '0.60',
-                'proposed_clsr_flag': '',
+                'limits': [
+                    {'label': 'UCL',        'present': '3.50', 'proposed': '3.80'},
+                    {'label': 'Centerline', 'present': '2.10', 'proposed': '2.20'},
+                    {'label': 'LCL',        'present': '0.70', 'proposed': '0.60'},
+                    {'label': 'CLSR',       'present': 'Flag', 'proposed': '',
+                     'present_is_flag': True},
+                ],
             },
             {
                 'number': '1',
                 'monitor_set': 'MON_SET_002',
                 'measurement_set': 'MEAS_SET_002',
                 'chart_type': 'CLSR',
-                'present_ucl': '4.00', 'present_cl': '2.50', 'present_lcl': '1.00',
-                'present_clsr_flag': 'Flag',
-                'proposed_ucl': '4.20', 'proposed_cl': '2.60', 'proposed_lcl': '1.00',
-                'proposed_clsr_flag': '',
+                'limits': [
+                    {'label': 'UCL',        'present': '4.00', 'proposed': '4.20'},
+                    {'label': 'Centerline', 'present': '2.50', 'proposed': '2.60'},
+                    {'label': 'LCL',        'present': '1.00', 'proposed': '1.00'},
+                    {'label': 'CLSR',       'present': 'Flag', 'proposed': '',
+                     'present_is_flag': True},
+                ],
             },
             {
                 'number': '1',
                 'monitor_set': 'MON_SET_003',
                 'measurement_set': 'MEAS_SET_003',
                 'chart_type': 'CLSR',
-                'present_ucl': '2.90', 'present_cl': '1.80', 'present_lcl': '0.70',
-                'present_clsr_flag': '',
-                'proposed_ucl': '3.10', 'proposed_cl': '1.90', 'proposed_lcl': '0.70',
-                'proposed_clsr_flag': '',
+                'limits': [
+                    {'label': 'UCL',        'present': '2.90', 'proposed': '3.10'},
+                    {'label': 'Centerline', 'present': '1.80', 'proposed': '1.90'},
+                    {'label': 'LCL',        'present': '0.70', 'proposed': '0.70'},
+                    {'label': 'CLSR',       'present': '',     'proposed': ''},
+                ],
             },
         ],
     }
