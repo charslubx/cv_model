@@ -453,13 +453,19 @@ def _build_inner_value_table(doc, cell, limit_rows, cell_twip):
     在外层单元格 cell 内嵌入一个 3 列无边框表格。
 
     limit_rows : list of dict，每行包含：
-        label      str   第1列标签（如 'UCL'）
-        value      str   第3列数值
-        color      RGBColor | None   第3列文字颜色，None 表示默认黑色
-    cell_twip  : 外层单元格宽度（twip），用于计算内嵌表格总宽
+        label       str            第1列标签（如 'UCL'、'CLSR'，任意字符串）
+        value       str            第3列主数值（蓝色）
+        value_color RGBColor|None  主数值颜色，默认 BLUE（有值时）
+        flag        str            追加在数值后的标记文字（如 'Flag'），默认 ''
+        flag_color  RGBColor|None  flag 文字颜色：
+                                     传 GREEN → 绿色，传 RED → 红色，
+                                     None → 与 value 同色
+    cell_twip  : 外层单元格宽度（twip）
 
     内嵌表格列宽分配：label 45% | colon 10% | value 45%
     """
+    RED = RGBColor(0xFF, 0x00, 0x00)
+
     n = len(limit_rows)
     if n == 0:
         return
@@ -468,7 +474,6 @@ def _build_inner_value_table(doc, cell, limit_rows, cell_twip):
     colon_twip  = int(cell_twip * 0.10)
     value_twip  = cell_twip - label_twip - colon_twip
 
-    # 在 doc body 临时创建表格，再移入 cell
     nested = doc.add_table(rows=n, cols=3)
     nested.style = 'Table Grid'
     nested.autofit = False
@@ -477,7 +482,6 @@ def _build_inner_value_table(doc, cell, limit_rows, cell_twip):
 
     for i, row_data in enumerate(limit_rows):
         nr = nested.rows[i]
-        _set_row_height(nr, 0.5)
 
         c0 = nr.cells[0]
         c0.width = Cm(label_twip / 567)
@@ -493,10 +497,26 @@ def _build_inner_value_table(doc, cell, limit_rows, cell_twip):
         c2 = nr.cells[2]
         c2.width = Cm(value_twip / 567)
         _set_cell_no_padding(c2)
-        val = row_data.get('value', '')
-        clr = row_data.get('color', None)
-        _cell_write(c2, val, size_pt=10, bold=bool(val),
-                    color=clr, valign='center')
+        _set_cell_valign(c2, 'center')
+        c2.text = ''
+        p = c2.paragraphs[0]
+
+        val  = row_data.get('value', '')
+        vclr = row_data.get('value_color', BLUE if val else None)
+        flag = row_data.get('flag', '')
+        fclr = row_data.get('flag_color', None)
+
+        if val:
+            r_val = p.add_run(val)
+            _set_run_font(r_val, size_pt=10, bold=True, color=vclr)
+        if flag:
+            if val:
+                r_sp = p.add_run(' ')
+                _set_run_font(r_sp, size_pt=10)
+            r_flag = p.add_run(flag)
+            # flag_color 优先；未指定时若有数值则与数值同色，否则绿色
+            fc = fclr if fclr is not None else (vclr if val else GREEN)
+            _set_run_font(r_flag, size_pt=10, bold=True, color=fc)
 
     # 从 body 摘出，插入 cell 的 tc 元素（放在末尾空段落之前）
     nested_tbl_el = nested._tbl
@@ -512,37 +532,50 @@ def _limits_from_rec(rec, prefix):
     """
     从 change_row 记录中提取某个前缀（present / proposed）的 limit_rows。
 
-    优先读取 rec['limits'] 列表（每项含 label / present / proposed）；
-    若无则退化到旧式扁平键（{prefix}_ucl / {prefix}_cl 等）。
+    优先读取 rec['limits'] 列表，每项支持：
+        label           str   指标名（UCL / Centerline / LCL / CLSR 或任意自定义）
+        present / proposed  str   该 prefix 的主数值
+        present_flag / proposed_flag   str   追加在数值后的标记文字（如 'Flag'）
+        present_flag_color / proposed_flag_color
+                        'red' | 'green' | None   flag 颜色，默认绿色
 
-    返回 list of {'label', 'value', 'color'}
+    返回 list of {'label', 'value', 'value_color', 'flag', 'flag_color'}
     """
+    RED   = RGBColor(0xFF, 0x00, 0x00)
+
     if 'limits' in rec:
         rows = []
         for item in rec['limits']:
-            val = item.get(prefix, '')
-            is_flag = item.get(f'{prefix}_is_flag', False)
+            val      = item.get(prefix, '')
+            flag     = item.get(f'{prefix}_flag', '')
+            fc_str   = item.get(f'{prefix}_flag_color', 'green')
+            flag_clr = RED if fc_str == 'red' else GREEN
             rows.append({
-                'label': item.get('label', ''),
-                'value': val,
-                'color': GREEN if (is_flag and val) else (BLUE if val else None),
+                'label':       item.get('label', ''),
+                'value':       val,
+                'value_color': BLUE if val else None,
+                'flag':        flag,
+                'flag_color':  flag_clr if flag else None,
             })
         return rows
 
-    # 旧式键退化兼容
+    # 旧式扁平键退化兼容
     default_limits = [
-        ('UCL',        f'{prefix}_ucl',       False),
-        ('Centerline', f'{prefix}_cl',        False),
-        ('LCL',        f'{prefix}_lcl',       False),
-        ('CLSR',       f'{prefix}_clsr_flag', True),
+        ('UCL',        f'{prefix}_ucl',  ''),
+        ('Centerline', f'{prefix}_cl',   ''),
+        ('LCL',        f'{prefix}_lcl',  ''),
+        ('CLSR',       f'{prefix}_clsr', f'{prefix}_clsr_flag'),
     ]
     rows = []
-    for label, key, is_flag in default_limits:
-        val = rec.get(key, '')
+    for label, val_key, flag_key in default_limits:
+        val  = rec.get(val_key, '')
+        flag = rec.get(flag_key, '') if flag_key else ''
         rows.append({
-            'label': label,
-            'value': val,
-            'color': GREEN if (is_flag and val) else (BLUE if val else None),
+            'label':       label,
+            'value':       val,
+            'value_color': BLUE if val else None,
+            'flag':        flag,
+            'flag_color':  GREEN if flag else None,
         })
     return rows
 
@@ -1442,11 +1475,14 @@ def main():
                 'measurement_set': 'MEAS_SET_001',
                 'chart_type': 'CLSR',
                 'limits': [
-                    {'label': 'UCL',        'present': '3.50', 'proposed': '3.80'},
-                    {'label': 'Centerline', 'present': '2.10', 'proposed': '2.20'},
-                    {'label': 'LCL',        'present': '0.70', 'proposed': '0.60'},
-                    {'label': 'CLSR',       'present': 'Flag', 'proposed': '',
-                     'present_is_flag': True},
+                    {'label': 'UCL',        'present': '493',  'proposed': '488.4'},
+                    {'label': 'Centerline', 'present': '487',  'proposed': '487'},
+                    {'label': 'LCL',        'present': '481',  'proposed': '485.6'},
+                    # CLSR 有数值 + Flag 标记，present 超限显示红色 flag，proposed 无 flag
+                    {'label': 'CLSR',
+                     'present': '17.4', 'present_flag': 'Flag', 'present_flag_color': 'red',
+                     'proposed': '4',   'proposed_flag': '',
+                    },
                 ],
             },
             {
@@ -1455,11 +1491,13 @@ def main():
                 'measurement_set': 'MEAS_SET_002',
                 'chart_type': 'CLSR',
                 'limits': [
-                    {'label': 'UCL',        'present': '4.00', 'proposed': '4.20'},
-                    {'label': 'Centerline', 'present': '2.50', 'proposed': '2.60'},
-                    {'label': 'LCL',        'present': '1.00', 'proposed': '1.00'},
-                    {'label': 'CLSR',       'present': 'Flag', 'proposed': '',
-                     'present_is_flag': True},
+                    {'label': 'UCL',        'present': '350.25', 'proposed': '352.0'},
+                    {'label': 'Centerline', 'present': '348.10', 'proposed': '348.1'},
+                    {'label': 'LCL',        'present': '345.95', 'proposed': '344.2'},
+                    {'label': 'CLSR',
+                     'present': '8.2', 'present_flag': 'Flag', 'present_flag_color': 'green',
+                     'proposed': '2',  'proposed_flag': '',
+                    },
                 ],
             },
             {
@@ -1471,7 +1509,7 @@ def main():
                     {'label': 'UCL',        'present': '2.90', 'proposed': '3.10'},
                     {'label': 'Centerline', 'present': '1.80', 'proposed': '1.90'},
                     {'label': 'LCL',        'present': '0.70', 'proposed': '0.70'},
-                    {'label': 'CLSR',       'present': '',     'proposed': ''},
+                    {'label': 'CLSR',       'present': '1.2',  'proposed': '0.8'},
                 ],
             },
         ],
