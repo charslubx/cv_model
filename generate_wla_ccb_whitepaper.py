@@ -823,45 +823,68 @@ def _build_section10(doc, data, page_w_cm):
         '10) Control Chart Setup: Only fill in section for SPC++ changes or SPC# chart creation'
     ), size_pt=12, color=BLACK)
 
-    # ---------- a. Chart Modification ----------
+    # ---------- a. Chart Modification：3行×2列无边框表格 ----------
+    # 列：☐/☒ 单元格 | 说明文字单元格
     _add_sub_item(doc, 'a.', 'Chart Modification: (check one)')
 
     mod_sel = data.get('chart_modification', 'revision')
-    for key, label in [
-        ('revision',   'Chart Revision'),
-        ('new',        'New Chart Creation. Please\ncomplete section 10b.'),
-        ('deletion',   'Chart Deletion'),
-    ]:
-        p = doc.add_paragraph()
-        p.paragraph_format.left_indent    = Cm(2.54)
-        p.paragraph_format.space_before   = Pt(1)
-        p.paragraph_format.space_after    = Pt(1)
+    mod_options = [
+        ('revision', 'Chart Revision'),
+        ('new',      'New Chart Creation. Please\ncomplete section 10b.'),
+        ('deletion', 'Chart Deletion'),
+    ]
+    tbl_a = doc.add_table(rows=len(mod_options), cols=2)
+    tbl_a.autofit = False
+    _set_table_no_borders(tbl_a)
+    _set_table_indent(tbl_a, 2.54)
+    checkbox_tw = int(0.3 * 1440)
+    label_tw    = int(2.5 * 1440)
+    _set_table_total_width(tbl_a, (checkbox_tw + label_tw) / 1440)
+    for i, (key, label) in enumerate(mod_options):
+        row = tbl_a.rows[i]
+        _set_row_height(row, 0.55)
         mark = '☒' if mod_sel == key else '☐'
-        _para_add_run(p, f'{mark}    {label}', size_pt=10)
+        c0 = row.cells[0]
+        c0.width = Cm(checkbox_tw / 567)
+        _set_cell_no_padding(c0)
+        _cell_write(c0, mark, size_pt=10, align=WD_ALIGN_PARAGRAPH.CENTER, valign='center')
+        c1 = row.cells[1]
+        c1.width = Cm(label_tw / 567)
+        _set_cell_no_padding(c1)
+        _cell_write(c1, label, size_pt=10, valign='center')
 
-    # ---------- b. Chart By ----------
+    # ---------- b. Chart By：4行×4列无边框表格（每行两个选项，每选项=☐+说明各占一格）----------
     _add_sub_item(doc, 'b.', 'Chart By: (check one and fill out table below, only needed for New Chart Creation)')
 
     chart_by = data.get('chart_by', '')
     cb_options = [
-        [('equipment',  'Equipment'),      ('all_categories', 'All Categories')],
-        [('monitor',    'Monitor'),         ('process',        'Process')],
-        [('operation',  'Operation'),       ('custom_context', 'Custom Context Categories')],
-        [('product',    'Product'),         (None,             '')],
+        [('equipment',      'Equipment'),             ('all_categories', 'All Categories')],
+        [('monitor',        'Monitor'),               ('process',        'Process')],
+        [('operation',      'Operation'),             ('custom_context', 'Custom Context Categories')],
+        [('product',        'Product'),               (None,             '')],
     ]
-    for row_opts in cb_options:
-        p = doc.add_paragraph()
-        p.paragraph_format.left_indent  = Cm(2.54)
-        p.paragraph_format.space_before = Pt(1)
-        p.paragraph_format.space_after  = Pt(1)
-        parts = []
-        for key, label in row_opts:
-            if not label:
-                parts.append('')
-                continue
-            mark = '☒' if chart_by == key else '☐'
-            parts.append(f'{mark}  {label}')
-        _para_add_run(p, f'{parts[0]:<35}{parts[1]}', size_pt=10)
+    cb_tw = int(0.3 * 1440)
+    cb_label_tw = int(2.2 * 1440)
+    tbl_b = doc.add_table(rows=len(cb_options), cols=4)
+    tbl_b.autofit = False
+    _set_table_no_borders(tbl_b)
+    _set_table_indent(tbl_b, 2.54)
+    _set_table_total_width(tbl_b, (cb_tw + cb_label_tw) * 2 / 1440)
+    for i, row_opts in enumerate(cb_options):
+        row = tbl_b.rows[i]
+        _set_row_height(row, 0.55)
+        for col_pair, (key, label) in enumerate(row_opts):
+            c_chk = row.cells[col_pair * 2]
+            c_chk.width = Cm(cb_tw / 567)
+            _set_cell_no_padding(c_chk)
+            if label:
+                mark = '☒' if chart_by == key else '☐'
+                _cell_write(c_chk, mark, size_pt=10,
+                            align=WD_ALIGN_PARAGRAPH.CENTER, valign='center')
+            c_lbl = row.cells[col_pair * 2 + 1]
+            c_lbl.width = Cm(cb_label_tw / 567)
+            _set_cell_no_padding(c_lbl)
+            _cell_write(c_lbl, label or '', size_pt=10, valign='center')
 
     # 15列 SPC 表格（b 和 c 共用同一结构）
     _build_spc15_table(doc, data.get('spc_setup_rows', []), page_w_cm, prefix='setup')
