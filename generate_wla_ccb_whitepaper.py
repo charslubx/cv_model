@@ -11,6 +11,9 @@ from docx.shared import Pt, Cm, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
+from lxml import etree as _etree
+
+_W14 = 'http://schemas.microsoft.com/office/word/2010/wordml'
 
 
 # ---------------------------------------------------------------------------
@@ -27,6 +30,65 @@ HEADER_BG = 'D3D3D3'   # 表头灰色背景
 # ---------------------------------------------------------------------------
 # 底层工具函数（与 document_builder.py 风格一致）
 # ---------------------------------------------------------------------------
+
+def _make_checkbox_sdt(checked: bool = False) -> '_etree._Element':
+    """
+    返回一个 w:sdt 元素，内含 w14:checkbox 内容控件。
+    checked=True → 显示 ☒（已勾选），False → 显示 ☐（未勾选）。
+    在 Word 中点击可切换状态。
+    """
+    CHECKED_CHAR   = '&#x2612;'   # ☒ U+2612
+    UNCHECKED_CHAR = '&#x2610;'   # ☐ U+2610
+    checked_val    = '1' if checked else '0'
+    char           = CHECKED_CHAR if checked else UNCHECKED_CHAR
+
+    xml = f'''<w:sdt xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+                     xmlns:w14="{_W14}">
+  <w:sdtPr>
+    <w14:checkbox>
+      <w14:checked w14:val="{checked_val}"/>
+      <w14:checkedState w14:val="2612" w14:font="MS Gothic"/>
+      <w14:uncheckedState w14:val="2610" w14:font="MS Gothic"/>
+    </w14:checkbox>
+  </w:sdtPr>
+  <w:sdtContent>
+    <w:r>
+      <w:rPr>
+        <w:rFonts w:ascii="MS Gothic" w:hAnsi="MS Gothic" w:cs="MS Gothic"/>
+        <w:sz w:val="20"/>
+        <w:szCs w:val="20"/>
+      </w:rPr>
+      <w:t>{char}</w:t>
+    </w:r>
+  </w:sdtContent>
+</w:sdt>'''
+    return _etree.fromstring(xml)
+
+
+def _append_checkbox(para, checked: bool = False, label: str = '',
+                     size_pt: int = 10, space_after: bool = True):
+    """
+    在段落 para 中追加一个可点击复选框 SDT，
+    后跟 label 文字（若非空）。
+    """
+    para._p.append(_make_checkbox_sdt(checked))
+    if label:
+        r = para.add_run(('  ' if space_after else '') + label)
+        _set_run_font(r, size_pt=size_pt)
+
+
+def _cell_write_checkbox(cell, checked: bool, label: str, size_pt: int = 10,
+                          valign: str = 'center'):
+    """在单元格第一个段落里写一个复选框 SDT + label。"""
+    _set_cell_valign(cell, valign)
+    cell.text = ''
+    para = cell.paragraphs[0]
+    para._p.append(_make_checkbox_sdt(checked))
+    if label:
+        r = para.add_run('  ' + label)
+        _set_run_font(r, size_pt=size_pt)
+    return para
+
 
 def _set_run_font(run, font_name='Arial', size_pt=11,
                   bold=False, color=None, italic=False, underline=False):
@@ -224,8 +286,10 @@ def _build_section1(doc, data, page_w_cm):
     merged0.text = ''
     p1 = merged0.paragraphs[0]
     _para_add_run(p1, 'Phase:', bold=True)
-    _para_add_run(p1, '    ☐ PWP')
-    _para_add_run(p1, '    ☒ FWP')
+    _para_add_run(p1, '    ')
+    _append_checkbox(p1, checked=False, label='PWP')
+    _para_add_run(p1, '    ')
+    _append_checkbox(p1, checked=True,  label='FWP')
     _set_cell_shading(merged0, 'FFFFFF')
 
     # Row 1: FWP Horizon（合并列）
@@ -247,7 +311,10 @@ def _build_section1(doc, data, page_w_cm):
     _cell_write(c0, 'Classification:', bold=True, valign='center')
     _set_cell_shading(c0, 'FFFFFF')
     p2 = _cell_write(c1, '', valign='center')
-    _para_add_run(p2, '☐ 1   ☐ 2   ☐ 3   ☐ 3N   ☒ 4')
+    for label, is_checked in [('1', False), ('2', False), ('3', False),
+                               ('3N', False), ('4', True)]:
+        _append_checkbox(p2, checked=is_checked, label=label)
+        _para_add_run(p2, '   ')
     _set_cell_shading(c1, 'FFFFFF')
 
     # Row 3: Class IV PCCB（合并列）
@@ -844,11 +911,10 @@ def _build_section10(doc, data, page_w_cm):
     _set_table_total_width(tbl_a, (checkbox_tw + label_tw) / 1440)
     for i, (key, label) in enumerate(mod_options):
         row = tbl_a.rows[i]
-        mark = '☒' if mod_sel == key else '☐'
         c0 = row.cells[0]
         c0.width = Cm(checkbox_tw / 567)
         _set_cell_no_padding(c0)
-        _cell_write(c0, mark, size_pt=10, align=WD_ALIGN_PARAGRAPH.CENTER, valign='center')
+        _cell_write_checkbox(c0, checked=(mod_sel == key), label='', valign='center')
         c1 = row.cells[1]
         c1.width = Cm(label_tw / 567)
         _set_cell_no_padding(c1)
@@ -878,9 +944,8 @@ def _build_section10(doc, data, page_w_cm):
             c_chk.width = Cm(cb_tw / 567)
             _set_cell_no_padding(c_chk)
             if label:
-                mark = '☒' if chart_by == key else '☐'
-                _cell_write(c_chk, mark, size_pt=10,
-                            align=WD_ALIGN_PARAGRAPH.CENTER, valign='center')
+                _cell_write_checkbox(c_chk, checked=(chart_by == key),
+                                     label='', valign='center')
             c_lbl = row.cells[col_pair * 2 + 1]
             c_lbl.width = Cm(cb_label_tw / 567)
             _set_cell_no_padding(c_lbl)
@@ -915,11 +980,10 @@ def _build_section10(doc, data, page_w_cm):
     _set_table_total_width(tbl_c, (checkbox_tw + label_tw) / 1440)
     for i, (key, label) in enumerate(rules_options):
         row = tbl_c.rows[i]
-        mark = '☒' if rules_sel == key else '☐'
         c0 = row.cells[0]
         c0.width = Cm(checkbox_tw / 567)
         _set_cell_no_padding(c0)
-        _cell_write(c0, mark, size_pt=10, align=WD_ALIGN_PARAGRAPH.CENTER, valign='center')
+        _cell_write_checkbox(c0, checked=(rules_sel == key), label='', valign='center')
         c1 = row.cells[1]
         c1.width = Cm(label_tw / 567)
         _set_cell_no_padding(c1)
@@ -976,11 +1040,10 @@ def _build_section10(doc, data, page_w_cm):
     _set_table_total_width(tbl_d, (ds_cb_tw + ds_label_tw) / 1440)
     for i, (key, label) in enumerate(ds_options):
         row = tbl_d.rows[i]
-        mark = '☒' if ds_sel == key else '☐'
         c0 = row.cells[0]
         c0.width = Cm(ds_cb_tw / 567)
         _set_cell_no_padding(c0)
-        _cell_write(c0, mark, size_pt=10, align=WD_ALIGN_PARAGRAPH.CENTER, valign='center')
+        _cell_write_checkbox(c0, checked=(ds_sel == key), label='', valign='center')
         c1 = row.cells[1]
         c1.width = Cm(ds_label_tw / 567)
         _set_cell_no_padding(c1)
