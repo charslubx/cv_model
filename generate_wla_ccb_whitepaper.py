@@ -1,30 +1,21 @@
-"""
-WLA CCB Monitor Change White Paper 文档生成器
-
-所有 build_* / _build_* 函数均返回 bytes 或操作 doc 对象，
-不写磁盘文件。调用方通过 build_wla_ccb_document() 获取 bytes 流。
-"""
-
 import io
 from docx import Document
 from docx.shared import Pt, Cm, RGBColor
-from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 from lxml import etree as _etree
 
 _W14 = 'http://schemas.microsoft.com/office/word/2010/wordml'
 
-
 # ---------------------------------------------------------------------------
 # 颜色常量
 # ---------------------------------------------------------------------------
-BLUE   = RGBColor(0x00, 0x00, 0xFF)
-GREEN  = RGBColor(0x00, 0x80, 0x00)
-BLACK  = RGBColor(0x00, 0x00, 0x00)
-WHITE  = RGBColor(0xFF, 0xFF, 0xFF)
+BLUE = RGBColor(0x00, 0x00, 0xFF)
+GREEN = RGBColor(0x00, 0x80, 0x00)
+BLACK = RGBColor(0x00, 0x00, 0x00)
+WHITE = RGBColor(0xFF, 0xFF, 0xFF)
 
-HEADER_BG = 'D3D3D3'   # 表头灰色背景
+HEADER_BG = 'D3D3D3'  # 表头灰色背景
 
 
 # ---------------------------------------------------------------------------
@@ -32,15 +23,10 @@ HEADER_BG = 'D3D3D3'   # 表头灰色背景
 # ---------------------------------------------------------------------------
 
 def _make_checkbox_sdt(checked: bool = False) -> '_etree._Element':
-    """
-    返回一个 w:sdt 元素，内含 w14:checkbox 内容控件。
-    checked=True → 显示 ☒（已勾选），False → 显示 ☐（未勾选）。
-    在 Word 中点击可切换状态。
-    """
-    CHECKED_CHAR   = '&#x2612;'   # ☒ U+2612
-    UNCHECKED_CHAR = '&#x2610;'   # ☐ U+2610
-    checked_val    = '1' if checked else '0'
-    char           = CHECKED_CHAR if checked else UNCHECKED_CHAR
+    CHECKED_CHAR = '&#x2612;'  # ☒ U+2612
+    UNCHECKED_CHAR = '&#x2610;'  # ☐ U+2610
+    checked_val = '1' if checked else '0'
+    char = CHECKED_CHAR if checked else UNCHECKED_CHAR
 
     xml = f'''<w:sdt xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
                      xmlns:w14="{_W14}">
@@ -67,10 +53,6 @@ def _make_checkbox_sdt(checked: bool = False) -> '_etree._Element':
 
 def _append_checkbox(para, checked: bool = False, label: str = '',
                      size_pt: int = 10, space_after: bool = True):
-    """
-    在段落 para 中追加一个可点击复选框 SDT，
-    后跟 label 文字（若非空）。
-    """
     para._p.append(_make_checkbox_sdt(checked))
     if label:
         r = para.add_run(('  ' if space_after else '') + label)
@@ -78,8 +60,7 @@ def _append_checkbox(para, checked: bool = False, label: str = '',
 
 
 def _cell_write_checkbox(cell, checked: bool, label: str, size_pt: int = 10,
-                          valign: str = 'center'):
-    """在单元格第一个段落里写一个复选框 SDT + label。"""
+                         valign: str = 'center'):
     _set_cell_valign(cell, valign)
     cell.text = ''
     para = cell.paragraphs[0]
@@ -125,6 +106,16 @@ def _set_cell_valign(cell, align='top'):
     v_align.set(qn('w:val'), align)
 
 
+def _set_cell_text_direction(cell, direction='btLr'):
+    """设置单元格文字方向。btLr=从下到上竖排，lrTb=正常横排"""
+    tc_pr = cell._tc.get_or_add_tcPr()
+    td = tc_pr.find(qn('w:textDirection'))
+    if td is None:
+        td = OxmlElement('w:textDirection')
+        tc_pr.append(td)
+    td.set(qn('w:val'), direction)
+
+
 def _set_row_height(row, height_cm):
     tr_pr = row._tr.get_or_add_trPr()
     trH = OxmlElement('w:trHeight')
@@ -134,7 +125,6 @@ def _set_row_height(row, height_cm):
 
 
 def _set_table_total_width(tbl, width_inch):
-    """强制设置表格总宽（inch），解除 autofit"""
     tbl.autofit = False
     tbl_elem = tbl._tbl
     tbl_pr = tbl_elem.find(qn('w:tblPr'))
@@ -165,10 +155,9 @@ def _set_table_indent(tbl, indent_cm):
     tbl_pr.append(ind)
 
 
-def _cell_write(cell, text, align=WD_ALIGN_PARAGRAPH.LEFT,
-                font_name='Arial', size_pt=11,
+def _cell_write(cell, text, align=0,
+                font_name='Arial', size_pt=10,
                 bold=False, color=None, italic=False, valign='top'):
-    """写入单元格文字"""
     _set_cell_valign(cell, valign)
     cell.text = ''
     para = cell.paragraphs[0]
@@ -181,7 +170,6 @@ def _cell_write(cell, text, align=WD_ALIGN_PARAGRAPH.LEFT,
 
 def _cell_add_line(cell, text, font_name='Arial', size_pt=11,
                    bold=False, color=None):
-    """在单元格追加一个段落"""
     para = cell.add_paragraph()
     para.paragraph_format.space_before = Pt(0)
     para.paragraph_format.space_after = Pt(0)
@@ -191,7 +179,7 @@ def _cell_add_line(cell, text, font_name='Arial', size_pt=11,
     return para
 
 
-def _para_add_run(para, text, font_name='Arial', size_pt=11,
+def _para_add_run(para, text, font_name='Arial', size_pt=10,
                   bold=False, color=None, italic=False, underline=False):
     run = para.add_run(text)
     _set_run_font(run, font_name=font_name, size_pt=size_pt,
@@ -200,7 +188,6 @@ def _para_add_run(para, text, font_name='Arial', size_pt=11,
 
 
 def _set_font_name(run, name='Arial', size_pt=None, color=None):
-    """设置字体名（及可选的字号、颜色），不触碰 bold 让样式自己定义"""
     if size_pt is not None:
         run.font.size = Pt(size_pt)
     if color is not None:
@@ -215,9 +202,6 @@ def _set_font_name(run, name='Arial', size_pt=None, color=None):
 
 
 def _add_heading(doc, text, space_before=None, space_after=None):
-    """
-    1) 2) 这类 —— Heading 1，Arial 12号黑色，大纲级别1。
-    """
     p = doc.add_paragraph(style='Heading 1')
     if space_before is not None:
         p.paragraph_format.space_before = Pt(space_before)
@@ -230,10 +214,6 @@ def _add_heading(doc, text, space_before=None, space_after=None):
 
 
 def _add_sub_item(doc, letter, label, value=None, blue=False):
-    """
-    a. b. c. 这类 —— Heading 2，Arial 10号黑色，大纲级别2。
-    value 若为蓝色则单独设 color=BLUE。
-    """
     p = doc.add_paragraph(style='Heading 2')
     p.paragraph_format.left_indent = Cm(1.27)
     p.paragraph_format.first_line_indent = Cm(-0.63)
@@ -241,7 +221,7 @@ def _add_sub_item(doc, letter, label, value=None, blue=False):
     p.paragraph_format.space_after = Pt(1)
     p.clear()
     _set_font_name(p.add_run(f'{letter}  '), size_pt=10, color=BLACK)
-    _set_font_name(p.add_run(label),          size_pt=10, color=BLACK)
+    _set_font_name(p.add_run(label), size_pt=10, color=BLACK)
     if value:
         r_val = p.add_run(value)
         _set_font_name(r_val, size_pt=10, color=BLUE if blue else BLACK)
@@ -253,9 +233,8 @@ def _add_sub_item(doc, letter, label, value=None, blue=False):
 # ---------------------------------------------------------------------------
 
 def _build_title(doc):
-    """居中大标题，加粗+下划线"""
     p = doc.add_paragraph()
-    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p.alignment = 1
     p.paragraph_format.space_before = Pt(0)
     p.paragraph_format.space_after = Pt(12)
     r = p.add_run('WLA CCB Monitor Change White Paper')
@@ -263,7 +242,6 @@ def _build_title(doc):
 
 
 def _build_section1(doc, data, page_w_cm):
-    """1) Phase, Classification, Related WPs"""
     _add_heading(doc, '1) Phase, Classification, Related WPs:')
 
     total_twip = int(page_w_cm / 2.54 * 1440)
@@ -272,13 +250,11 @@ def _build_section1(doc, data, page_w_cm):
     col0_w = Cm(col0_twip / 567)
     col1_w = Cm(col1_twip / 567)
 
-    # 主表：Phase / FWP Horizon / Classification / Class IV / 参考WP 大标题
     tbl = doc.add_table(rows=5, cols=2)
     tbl.style = 'Table Grid'
     tbl.autofit = False
     _set_table_total_width(tbl, page_w_cm / 2.54)
 
-    # Row 0: Phase —— 合并为单列，"Phase:  ☐ PWP  ☒ FWP" 全在一个单元格
     _set_row_height(tbl.rows[0], 0.6)
     merged0 = tbl.rows[0].cells[0].merge(tbl.rows[0].cells[1])
     merged0.width = Cm(page_w_cm / 2.54)
@@ -289,10 +265,9 @@ def _build_section1(doc, data, page_w_cm):
     _para_add_run(p1, '    ')
     _append_checkbox(p1, checked=False, label='PWP')
     _para_add_run(p1, '    ')
-    _append_checkbox(p1, checked=True,  label='FWP')
+    _append_checkbox(p1, checked=True, label='FWP')
     _set_cell_shading(merged0, 'FFFFFF')
 
-    # Row 1: FWP Horizon（合并列）
     _set_row_height(tbl.rows[1], 0.6)
     merged1 = tbl.rows[1].cells[0].merge(tbl.rows[1].cells[1])
     merged1.width = Cm(page_w_cm / 2.54)
@@ -303,7 +278,6 @@ def _build_section1(doc, data, page_w_cm):
     _para_add_run(p, data.get('fwp_horizon', 'N/a'), bold=True, color=BLUE)
     _set_cell_shading(merged1, 'FFFFFF')
 
-    # Row 2: Classification —— 合并为单列
     _set_row_height(tbl.rows[2], 0.6)
     merged2 = tbl.rows[2].cells[0].merge(tbl.rows[2].cells[1])
     merged2.width = Cm(page_w_cm / 2.54)
@@ -318,7 +292,6 @@ def _build_section1(doc, data, page_w_cm):
         _para_add_run(p2, '   ')
     _set_cell_shading(merged2, 'FFFFFF')
 
-    # Row 3: Class IV PCCB（合并列）
     _set_row_height(tbl.rows[3], 0.6)
     merged3 = tbl.rows[3].cells[0].merge(tbl.rows[3].cells[1])
     merged3.width = Cm(page_w_cm / 2.54)
@@ -329,7 +302,6 @@ def _build_section1(doc, data, page_w_cm):
     _para_add_run(p, data.get('pccb_member', 'N/A'), bold=True, color=BLUE)
     _set_cell_shading(merged3, 'FFFFFF')
 
-    # Row 4: 参考WP 大标题（合并列，加粗）
     _set_row_height(tbl.rows[4], 0.7)
     merged4 = tbl.rows[4].cells[0].merge(tbl.rows[4].cells[1])
     merged4.width = Cm(page_w_cm / 2.54)
@@ -341,7 +313,6 @@ def _build_section1(doc, data, page_w_cm):
     )
     _set_cell_shading(merged4, 'FFFFFF')
 
-    # 参考WP 子表：Horizon | Title 表头 + N/a 行
     tbl_ref = doc.add_table(rows=2, cols=2)
     tbl_ref.style = 'Table Grid'
     tbl_ref.autofit = False
@@ -353,7 +324,7 @@ def _build_section1(doc, data, page_w_cm):
     _cell_write(tbl_ref.rows[0].cells[0], 'Horizon or reference number',
                 italic=True, valign='center')
     _cell_write(tbl_ref.rows[0].cells[1], 'Title',
-                italic=True, align=WD_ALIGN_PARAGRAPH.CENTER, valign='center')
+                italic=True, align=1, valign='center')
 
     _set_row_height(tbl_ref.rows[1], 0.55)
     ref_rows = data.get('reference_wps', [{'horizon': 'N/a', 'title': 'N/a'}])
@@ -364,7 +335,6 @@ def _build_section1(doc, data, page_w_cm):
 
 
 def _build_section2(doc, data):
-    """2) Date —— Heading 1"""
     p = doc.add_paragraph(style='Heading 1')
     p.paragraph_format.space_before = Pt(10)
     p.paragraph_format.space_after = Pt(4)
@@ -374,20 +344,18 @@ def _build_section2(doc, data):
 
 
 def _build_section3(doc, data):
-    """3) Authorship"""
     _add_heading(doc, '3) Authorship', space_before=10)
 
     items = [
-        ('a.', 'Primary author: ',            data.get('primary_author', 'Yuan, Ji'), True),
-        ('b.', 'Site (primary author only): ', data.get('site', 'CDDP'),              True),
-        ('c.', 'Co-author(s):',               data.get('co_authors', ''),             False),
+        ('a.', 'Primary author: ', data.get('primary_author', 'Yuan, Ji'), True),
+        ('b.', 'Site (primary author only): ', data.get('site', 'CDDP'), True),
+        ('c.', 'Co-author(s):', data.get('co_authors', ''), False),
     ]
     for letter, label, value, blue in items:
         _add_sub_item(doc, letter, label, value=value, blue=blue)
 
 
 def _build_section4(doc, data):
-    """4) Title of Change —— Heading 1"""
     p = doc.add_paragraph(style='Heading 1')
     p.paragraph_format.space_before = Pt(10)
     p.paragraph_format.space_after = Pt(4)
@@ -398,7 +366,6 @@ def _build_section4(doc, data):
 
 
 def _build_section5_header(doc, data):
-    """5) Change Description —— Heading 1 + a/b/c Heading 2"""
     _add_heading(doc, '5) Change Description:', space_before=10)
 
     sub_items = [
@@ -413,7 +380,6 @@ def _build_section5_header(doc, data):
 
 
 def _set_table_no_borders(tbl):
-    """去掉表格所有单元格边框（嵌套表格用）"""
     tbl_elem = tbl._tbl
     tbl_pr = tbl_elem.find(qn('w:tblPr'))
     if tbl_pr is None:
@@ -434,7 +400,6 @@ def _set_table_no_borders(tbl):
 
 
 def _set_cell_no_padding(cell):
-    """去掉单元格内边距，让嵌套表格紧贴边框"""
     tc_pr = cell._tc.get_or_add_tcPr()
     mar = OxmlElement('w:tcMar')
     for side in ('top', 'left', 'bottom', 'right'):
@@ -449,30 +414,15 @@ def _set_cell_no_padding(cell):
 
 
 def _build_inner_value_table(doc, cell, limit_rows, cell_twip):
-    """
-    在外层单元格 cell 内嵌入一个 3 列无边框表格。
-
-    limit_rows : list of dict，每行包含：
-        label       str            第1列标签（如 'UCL'、'CLSR'，任意字符串）
-        value       str            第3列主数值（蓝色）
-        value_color RGBColor|None  主数值颜色，默认 BLUE（有值时）
-        flag        str            追加在数值后的标记文字（如 'Flag'），默认 ''
-        flag_color  RGBColor|None  flag 文字颜色：
-                                     传 GREEN → 绿色，传 RED → 红色，
-                                     None → 与 value 同色
-    cell_twip  : 外层单元格宽度（twip）
-
-    内嵌表格列宽分配：label 45% | colon 10% | value 45%
-    """
     RED = RGBColor(0xFF, 0x00, 0x00)
 
     n = len(limit_rows)
     if n == 0:
         return
 
-    label_twip  = int(cell_twip * 0.45)
-    colon_twip  = int(cell_twip * 0.10)
-    value_twip  = cell_twip - label_twip - colon_twip
+    label_twip = int(cell_twip * 0.45)
+    colon_twip = int(cell_twip * 0.10)
+    value_twip = cell_twip - label_twip - colon_twip
 
     nested = doc.add_table(rows=n, cols=3)
     nested.style = 'Table Grid'
@@ -491,8 +441,7 @@ def _build_inner_value_table(doc, cell, limit_rows, cell_twip):
         c1 = nr.cells[1]
         c1.width = Cm(colon_twip / 567)
         _set_cell_no_padding(c1)
-        _cell_write(c1, ':', size_pt=10,
-                    align=WD_ALIGN_PARAGRAPH.CENTER, valign='center')
+        _cell_write(c1, ':', size_pt=10, align=1, valign='center')
 
         c2 = nr.cells[2]
         c2.width = Cm(value_twip / 567)
@@ -501,7 +450,7 @@ def _build_inner_value_table(doc, cell, limit_rows, cell_twip):
         c2.text = ''
         p = c2.paragraphs[0]
 
-        val  = row_data.get('value', '')
+        val = row_data.get('value', '')
         vclr = row_data.get('value_color', BLUE if val else None)
         flag = row_data.get('flag', '')
         fclr = row_data.get('flag_color', None)
@@ -514,86 +463,62 @@ def _build_inner_value_table(doc, cell, limit_rows, cell_twip):
                 r_sp = p.add_run(' ')
                 _set_run_font(r_sp, size_pt=10)
             r_flag = p.add_run(flag)
-            # flag_color 优先；未指定时若有数值则与数值同色，否则绿色
             fc = fclr if fclr is not None else (vclr if val else GREEN)
             _set_run_font(r_flag, size_pt=10, bold=True, color=fc)
 
-    # 从 body 摘出，插入 cell 的 tc 元素（放在末尾空段落之前）
     nested_tbl_el = nested._tbl
     nested_tbl_el.getparent().remove(nested_tbl_el)
 
     tc = cell._tc
-    # tc 末尾须保留一个 w:p（OOXML 规范），把表格插到最后一个 p 之前
     last_p = tc.findall(qn('w:p'))[-1]
     tc.insert(list(tc).index(last_p), nested_tbl_el)
 
 
 def _limits_from_rec(rec, prefix):
-    """
-    从 change_row 记录中提取某个前缀（present / proposed）的 limit_rows。
-
-    优先读取 rec['limits'] 列表，每项支持：
-        label           str   指标名（UCL / Centerline / LCL / CLSR 或任意自定义）
-        present / proposed  str   该 prefix 的主数值
-        present_flag / proposed_flag   str   追加在数值后的标记文字（如 'Flag'）
-        present_flag_color / proposed_flag_color
-                        'red' | 'green' | None   flag 颜色，默认绿色
-
-    返回 list of {'label', 'value', 'value_color', 'flag', 'flag_color'}
-    """
-    RED   = RGBColor(0xFF, 0x00, 0x00)
+    RED = RGBColor(0xFF, 0x00, 0x00)
 
     if 'limits' in rec:
         rows = []
         for item in rec['limits']:
-            val      = item.get(prefix, '')
-            flag     = item.get(f'{prefix}_flag', '')
-            fc_str   = item.get(f'{prefix}_flag_color', 'green')
+            val = item.get(prefix, '')
+            flag = item.get(f'{prefix}_flag', '')
+            fc_str = item.get(f'{prefix}_flag_color', 'green')
             flag_clr = RED if fc_str == 'red' else GREEN
             rows.append({
-                'label':       item.get('label', ''),
-                'value':       val,
+                'label': item.get('label', ''),
+                'value': val,
                 'value_color': BLUE if val else None,
-                'flag':        flag,
-                'flag_color':  flag_clr if flag else None,
+                'flag': flag,
+                'flag_color': flag_clr if flag else None,
             })
         return rows
 
-    # 旧式扁平键退化兼容
     default_limits = [
-        ('UCL',        f'{prefix}_ucl',  ''),
-        ('Centerline', f'{prefix}_cl',   ''),
-        ('LCL',        f'{prefix}_lcl',  ''),
-        ('CLSR',       f'{prefix}_clsr', f'{prefix}_clsr_flag'),
+        ('UCL', f'{prefix}_ucl', ''),
+        ('Centerline', f'{prefix}_cl', ''),
+        ('LCL', f'{prefix}_lcl', ''),
+        ('CLSR', f'{prefix}_clsr', f'{prefix}_clsr_flag'),
     ]
     rows = []
     for label, val_key, flag_key in default_limits:
-        val  = rec.get(val_key, '')
+        val = rec.get(val_key, '')
         flag = rec.get(flag_key, '') if flag_key else ''
         rows.append({
-            'label':       label,
-            'value':       val,
+            'label': label,
+            'value': val,
             'value_color': BLUE if val else None,
-            'flag':        flag,
-            'flag_color':  GREEN if flag else None,
+            'flag': flag,
+            'flag_color': GREEN if flag else None,
         })
     return rows
 
 
 def _build_change_table(doc, data, page_w_cm):
-    """
-    5c) 变更项目表格
-
-    列宽（twip）：# | Change items | Present value | Proposed value
-    Present / Proposed 列内部各放一个 3×n 无边框嵌套表格：
-        label | : | value
-    行数由每条记录的 limits 列表决定。
-    """
     total_twip = int(page_w_cm / 2.54 * 1440)
-    num_twip      = int(0.4 * 1440)   # # 列
-    present_twip  = int(2.2 * 1440)   # Present value
-    proposed_twip = int(2.2 * 1440)   # Proposed value
-    items_twip    = total_twip - num_twip - present_twip - proposed_twip  # Change items（剩余）
+    num_twip = int(0.4 * 1440)
+    present_twip = int(2.2 * 1440)
+    proposed_twip = int(2.2 * 1440)
+    items_twip = total_twip - num_twip - present_twip - proposed_twip
     col_twips = [num_twip, items_twip, present_twip, proposed_twip]
 
     tbl = doc.add_table(rows=1, cols=4)
@@ -601,28 +526,22 @@ def _build_change_table(doc, data, page_w_cm):
     tbl.autofit = False
     _set_table_total_width(tbl, page_w_cm / 2.54)
 
-    # 表头行
     _set_row_height(tbl.rows[0], 0.6)
     headers = ['#', 'Change items', 'Present value', 'Proposed value']
     for j, (txt, tw) in enumerate(zip(headers, col_twips)):
         c = tbl.rows[0].cells[j]
         c.width = Cm(tw / 567)
-        _cell_write(c, txt, align=WD_ALIGN_PARAGRAPH.CENTER,
-                    bold=True, valign='center')
+        _cell_write(c, txt, align=1, bold=True, valign='center')
         _set_cell_shading(c, HEADER_BG)
 
-    # 数据行
     change_rows = data.get('change_rows', [])
     for rec in change_rows:
         row = tbl.add_row()
         for j, tw in enumerate(col_twips):
             row.cells[j].width = Cm(tw / 567)
 
-        # Col 0: 序号
-        _cell_write(row.cells[0], rec.get('number', '1'),
-                    align=WD_ALIGN_PARAGRAPH.CENTER, valign='top')
+        _cell_write(row.cells[0], rec.get('number', '1'), align=1, valign='top')
 
-        # Col 1: Change items（Monitor set / Measurement set / Chart type）
         c1 = row.cells[1]
         _cell_write(c1, '', valign='top')
         p = c1.paragraphs[0]
@@ -643,11 +562,10 @@ def _build_change_table(doc, data, page_w_cm):
         _para_add_run(p3, 'Chart type: ')
         _para_add_run(p3, rec.get('chart_type', 'CLSR'), bold=True, color=BLUE)
 
-        # Col 2 & Col 3: 嵌套 3×n 表格
         for col_idx, prefix in [(2, 'present'), (3, 'proposed')]:
             cv = row.cells[col_idx]
             _set_cell_valign(cv, 'top')
-            cv.text = ''                          # 清空，保留末尾空 p
+            cv.text = ''
             limit_rows = _limits_from_rec(rec, prefix)
             _build_inner_value_table(doc, cv, limit_rows, col_twips[col_idx])
 
@@ -659,7 +577,6 @@ def _build_change_table(doc, data, page_w_cm):
 # ---------------------------------------------------------------------------
 
 def _build_page2(doc, data, page_w_cm):
-    """第二页：第6-9节（自然排版，无强制分页符）"""
     _build_section6(doc, data)
     _build_section7(doc, data, page_w_cm)
     _build_section8(doc, data, page_w_cm)
@@ -667,11 +584,6 @@ def _build_page2(doc, data, page_w_cm):
 
 
 def _build_section5_fwp_table(doc, data, page_w_cm):
-    """
-    5) a. (FWP only)* 子项 + Previous/Current value 对比表。
-    紧跟在 c. Specific change items 的嵌套表之后。
-    """
-    # a. (FWP only)* 子项 —— Heading 2
     p = doc.add_paragraph(style='Heading 2')
     p.paragraph_format.left_indent = Cm(1.27)
     p.paragraph_format.first_line_indent = Cm(-0.63)
@@ -681,7 +593,6 @@ def _build_section5_fwp_table(doc, data, page_w_cm):
     _set_font_name(p.add_run('a.  '), size_pt=10, color=BLACK)
     r_fwp = p.add_run('(FWP only)*')
     _set_font_name(r_fwp, size_pt=10, color=BLACK)
-    r_fwp.font.bold = True
     desc = data.get(
         'fwp_only_desc',
         ' Incorporate the C-Spec (or equivalent) into the PWP Control Plan for '
@@ -689,14 +600,13 @@ def _build_section5_fwp_table(doc, data, page_w_cm):
     )
     _set_font_name(p.add_run(desc), size_pt=10, color=BLACK)
 
-    # 三列表格：# | Change items | Previous value | Current value
     total_twip = int(page_w_cm / 2.54 * 1440)
-    num_twip   = int(0.4 * 1440)
-    val_twip   = int(2.2 * 1440)
+    num_twip = int(0.4 * 1440)
+    val_twip = int(2.2 * 1440)
     items_twip = total_twip - num_twip - val_twip * 2
 
     col_twips = [num_twip, items_twip, val_twip, val_twip]
-    headers   = ['#', 'Change items', 'Previous value', 'Current value']
+    headers = ['#', 'Change items', 'Previous value', 'Current value']
 
     tbl = doc.add_table(rows=1, cols=4)
     tbl.style = 'Table Grid'
@@ -707,8 +617,7 @@ def _build_section5_fwp_table(doc, data, page_w_cm):
     for j, (txt, tw) in enumerate(zip(headers, col_twips)):
         c = tbl.rows[0].cells[j]
         c.width = Cm(tw / 567)
-        _cell_write(c, txt, bold=True, size_pt=10,
-                    align=WD_ALIGN_PARAGRAPH.CENTER, valign='center')
+        _cell_write(c, txt, bold=True, size_pt=10, align=1, valign='center')
         _set_cell_shading(c, HEADER_BG)
 
     fwp_rows = data.get('fwp_change_rows', [])
@@ -723,7 +632,6 @@ def _build_section5_fwp_table(doc, data, page_w_cm):
             _cell_write(c, rec.get(key, ''), size_pt=10, valign='top')
             _set_cell_shading(c, 'FFFFFF')
 
-    # 若无数据补两个空行
     if not fwp_rows:
         for _ in range(2):
             row = tbl.add_row()
@@ -733,7 +641,6 @@ def _build_section5_fwp_table(doc, data, page_w_cm):
 
 
 def _build_section6(doc, data):
-    """6) Reason for Change"""
     _add_heading(doc, '6) Reason for Change:')
     p = doc.add_paragraph()
     p.paragraph_format.space_before = Pt(4)
@@ -742,54 +649,43 @@ def _build_section6(doc, data):
 
 
 def _build_section7(doc, data, page_w_cm):
-    """
-    7) CEI/Site Implementation Owners
-    表格：CEI Owners | SITE | Date reviewed and approved
-    下方有一个要点说明（bullet）
-    """
-    # 标题：CEI 加下划线
     p = doc.add_paragraph(style='Heading 1')
     p.paragraph_format.space_before = Pt(10)
     p.paragraph_format.space_after = Pt(4)
     p.clear()
     _set_font_name(p.add_run('7) '), size_pt=12, color=BLACK)
-    r_cei = p.add_run('CEI')
+    r_cei = p.add_run('CE!')
     _set_font_name(r_cei, size_pt=12, color=BLACK)
-    r_cei.font.underline = True
     _set_font_name(p.add_run('/Site Implementation Owners:'), size_pt=12, color=BLACK)
 
-    # 表格：3列
     total_twip = int(page_w_cm / 2.54 * 1440)
-    col_twips  = [int(total_twip * 0.38), int(total_twip * 0.12),
-                  total_twip - int(total_twip * 0.38) - int(total_twip * 0.12)]
+    col_twips = [int(total_twip * 0.38), int(total_twip * 0.12),
+                 total_twip - int(total_twip * 0.38) - int(total_twip * 0.12)]
 
     tbl = doc.add_table(rows=2, cols=3)
     tbl.style = 'Table Grid'
     tbl.autofit = False
     _set_table_total_width(tbl, page_w_cm / 2.54)
 
-    # 表头行
     _set_row_height(tbl.rows[0], 0.6)
-    headers = ['CEI Owners:', 'SITE', 'Date reviewed and approved:']
+    headers = ['CE!Owners:', 'SITE', 'Date reviewed and approved:']
     for j, (txt, tw) in enumerate(zip(headers, col_twips)):
         c = tbl.rows[0].cells[j]
         c.width = Cm(tw / 567)
         _cell_write(c, txt, bold=True, size_pt=10, valign='center')
         _set_cell_shading(c, 'F2F2F2')
 
-    # 数据行
     _set_row_height(tbl.rows[1], 0.7)
     owners = data.get('cei_owners', [{'name': '', 'site': 'CDDP', 'date': ''}])
-    owner  = owners[0] if owners else {}
+    owner = owners[0] if owners else {}
     for j, (key, tw) in enumerate(zip(['name', 'site', 'date'], col_twips)):
         c = tbl.rows[1].cells[j]
         c.width = Cm(tw / 567)
         val = owner.get(key, '')
-        color = BLUE if key == 'date' and val else None
+        color = BLUE if key in ('name', 'date') and val else None
         _cell_write(c, val, size_pt=10, color=color, valign='center')
         _set_cell_shading(c, 'FFFFFF')
 
-    # 额外 owners 行
     for owner in owners[1:]:
         row = tbl.add_row()
         _set_row_height(row, 0.7)
@@ -801,53 +697,42 @@ def _build_section7(doc, data, page_w_cm):
             _cell_write(c, val, size_pt=10, color=color, valign='center')
             _set_cell_shading(c, 'FFFFFF')
 
-    # 要点说明（bullet）
-    note = data.get('cei_note',
-        'Any owners responsible for both FWP and PWP stages.')
+    note = data.get('cei_note', 'Any owners responsible for both FWP and PWP stages.')
     bp = doc.add_paragraph(style='List Bullet')
     bp.paragraph_format.space_before = Pt(4)
-    bp.paragraph_format.space_after  = Pt(2)
+    bp.paragraph_format.space_after = Pt(2)
     _para_add_run(bp, note, size_pt=10)
 
 
 def _build_section8(doc, data, page_w_cm):
-    """
-    8) Specifications, Controlled Documents Affected
-    标题带括号说明（小字斜体），下方两列表格
-    """
-    # 标题1
     p = doc.add_paragraph(style='Heading 1')
     p.paragraph_format.space_before = Pt(10)
     p.paragraph_format.space_after = Pt(2)
     p.clear()
-    _set_font_name(p.add_run('8) Specifications, Controlled Documents Affected:'),
-                   size_pt=12, color=BLACK)
-    r_note = p.add_run('  (list all affected by changes above)')
+    _set_font_name(p.add_run('8) Specifications, Controlled Documents Affected:'), size_pt=12, color=BLACK)
+    r_note = p.add_run(' (list all affected by changes above)')
     _set_font_name(r_note, size_pt=10, color=BLACK)
     r_note.font.italic = True
+    r_note.font.bold = False
 
-    # 两列表格
     total_twip = int(page_w_cm / 2.54 * 1440)
-    col0_twip  = int(total_twip * 0.45)
-    col1_twip  = total_twip - col0_twip
+    col0_twip = int(total_twip * 0.45)
+    col1_twip = total_twip - col0_twip
 
     tbl = doc.add_table(rows=1, cols=2)
     tbl.style = 'Table Grid'
     tbl.autofit = False
     _set_table_total_width(tbl, page_w_cm / 2.54)
 
-    # 表头
     _set_row_height(tbl.rows[0], 0.6)
     for j, (txt, tw) in enumerate(
             zip(['Spec and/or Controlled Document #', 'Document Title'],
                 [col0_twip, col1_twip])):
         c = tbl.rows[0].cells[j]
         c.width = Cm(tw / 567)
-        _cell_write(c, txt, bold=True, size_pt=10,
-                    align=WD_ALIGN_PARAGRAPH.CENTER, valign='center')
+        _cell_write(c, txt, bold=True, size_pt=10, align=1, valign='center')
         _set_cell_shading(c, HEADER_BG)
 
-    # 数据行
     spec_rows = data.get('spec_rows', [{'spec_num': 'N/a', 'title': 'N/a'}])
     for rec in spec_rows:
         row = tbl.add_row()
@@ -855,42 +740,33 @@ def _build_section8(doc, data, page_w_cm):
         row.cells[0].width = Cm(col0_twip / 567)
         row.cells[1].width = Cm(col1_twip / 567)
         _cell_write(row.cells[0], rec.get('spec_num', ''), size_pt=10, valign='center')
-        _cell_write(row.cells[1], rec.get('title', ''),    size_pt=10, valign='center')
+        _cell_write(row.cells[1], rec.get('title', ''), size_pt=10, valign='center')
         _set_cell_shading(row.cells[0], 'FFFFFF')
         _set_cell_shading(row.cells[1], 'FFFFFF')
 
 
 def _build_section9(doc, data, page_w_cm):
-    """
-    9) Concerns and Considerations
-    5列表格：# | Forum identifying concern | Issue | Resolution | Status
-    """
     _add_heading(doc, '9) Concerns and Considerations:')
 
     total_twip = int(page_w_cm / 2.54 * 1440)
-    # 列宽比例：# 小, Forum 适中, Issue 适中, Resolution 最宽, Status 小
     col_ratios = [0.05, 0.15, 0.20, 0.45, 0.15]
-    col_twips  = [int(total_twip * r) for r in col_ratios]
-    col_twips[-1] = total_twip - sum(col_twips[:-1])   # 最后列补齐误差
+    col_twips = [int(total_twip * r) for r in col_ratios]
+    col_twips[-1] = total_twip - sum(col_twips[:-1])
 
-    headers = ['#', 'Forum\nidentifying\nconcern', 'Issue', 'Resolution',
-               'Status:\n(Open or\nClosed)']
+    headers = ['#', 'Forum\nidentifying\nconcern', 'Issue', 'Resolution', 'Status:\n(Open or\nClosed)']
 
     tbl = doc.add_table(rows=1, cols=5)
     tbl.style = 'Table Grid'
     tbl.autofit = False
     _set_table_total_width(tbl, page_w_cm / 2.54)
 
-    # 表头行
     _set_row_height(tbl.rows[0], 1.2)
     for j, (txt, tw) in enumerate(zip(headers, col_twips)):
         c = tbl.rows[0].cells[j]
         c.width = Cm(tw / 567)
-        _cell_write(c, txt, bold=True, size_pt=10,
-                    align=WD_ALIGN_PARAGRAPH.CENTER, valign='center')
+        _cell_write(c, txt, bold=True, size_pt=10, align=1, valign='center')
         _set_cell_shading(c, HEADER_BG)
 
-    # 数据行
     concern_rows = data.get('concern_rows', [])
     for rec in concern_rows:
         row = tbl.add_row()
@@ -899,14 +775,11 @@ def _build_section9(doc, data, page_w_cm):
             row.cells[j].width = Cm(tw / 567)
 
         keys = ['number', 'forum', 'issue', 'resolution', 'status']
-        blue_cols = {0, 1, 4}   # #/Forum/Status 用蓝色
+        blue_cols = {0, 1, 4}
         for j, key in enumerate(keys):
             val = rec.get(key, '')
-            color = BLUE if (j in blue_cols and val) else None
-            _cell_write(row.cells[j], val, size_pt=10,
-                        color=color, valign='top')
+            _cell_write(row.cells[j], val, size_pt=10, color=BLUE, valign='top')
 
-    # 若无数据行，补两个空行
     if not concern_rows:
         for _ in range(2):
             row = tbl.add_row()
@@ -914,26 +787,28 @@ def _build_section9(doc, data, page_w_cm):
             for j, tw in enumerate(col_twips):
                 row.cells[j].width = Cm(tw / 567)
 
-def _build_section10(doc, data, page_w_cm):
-    """10) Control Chart Setup"""
 
-    # ---------- 10) 标题 ----------
+def _build_section10(doc, data, page_w_cm):
+    note = data.get('concerns_note', 'Any owners responsible for both FWP and PWP stages.')
+    bp = doc.add_paragraph(style='List Bullet')
+    bp.paragraph_format.space_before = Pt(0)
+    bp.paragraph_format.space_after = Pt(2)
+    _para_add_run(bp, note, size_pt=10)
+
     p = doc.add_paragraph(style='Heading 1')
     p.paragraph_format.space_before = Pt(10)
-    p.paragraph_format.space_after  = Pt(4)
+    p.paragraph_format.space_after = Pt(4)
     p.clear()
     _set_font_name(p.add_run(
         '10) Control Chart Setup: Only fill in section for SPC++ changes or SPC# chart creation'
     ), size_pt=12, color=BLACK)
 
-    # ---------- a. Chart Modification：3行×2列无边框表格 ----------
-    # 列：☐/☒ 单元格 | 说明文字单元格
     _add_sub_item(doc, 'a.', 'Chart Modification: (check one)')
 
     mod_sel = data.get('chart_modification', 'revision')
     mod_options = [
         ('revision', 'Chart Revision'),
-        ('new',      'New Chart Creation. Please\ncomplete section 10b.'),
+        ('new', 'New Chart Creation. Please\ncomplete section 10b.'),
         ('deletion', 'Chart Deletion'),
     ]
     tbl_a = doc.add_table(rows=len(mod_options), cols=2)
@@ -941,7 +816,7 @@ def _build_section10(doc, data, page_w_cm):
     _set_table_no_borders(tbl_a)
     _set_table_indent(tbl_a, 2.54)
     checkbox_tw = int(0.3 * 1440)
-    label_tw    = int(2.5 * 1440)
+    label_tw = int(2.5 * 1440)
     _set_table_total_width(tbl_a, (checkbox_tw + label_tw) / 1440)
     for i, (key, label) in enumerate(mod_options):
         row = tbl_a.rows[i]
@@ -954,15 +829,14 @@ def _build_section10(doc, data, page_w_cm):
         _set_cell_no_padding(c1)
         _cell_write(c1, label, size_pt=10, valign='center')
 
-    # ---------- b. Chart By：4行×4列无边框表格（每行两个选项，每选项=☐+说明各占一格）----------
     _add_sub_item(doc, 'b.', 'Chart By: (check one and fill out table below, only needed for New Chart Creation)')
 
     chart_by = data.get('chart_by', 'all_categories')
     cb_options = [
-        [('equipment',      'Equipment'),             ('all_categories', 'All Categories')],
-        [('monitor',        'Monitor'),               ('process',        'Process')],
-        [('operation',      'Operation'),             ('custom_context', 'Custom Context Categories')],
-        [('product',        'Product'),               (None,             '')],
+        [('equipment', 'Equipment'), ('all_categories', 'All Categories')],
+        [('monitor', 'Monitor'), ('process', 'Process')],
+        [('operation', 'Operation'), ('custom_context', 'Custom Context Categories')],
+        [('product', 'Product'), (None, '')],
     ]
     cb_tw = int(0.3 * 1440)
     cb_label_tw = int(2.2 * 1440)
@@ -985,10 +859,9 @@ def _build_section10(doc, data, page_w_cm):
             _set_cell_no_padding(c_lbl)
             _cell_write(c_lbl, label or '', size_pt=10, valign='center')
 
-    # 15列 SPC 表格（b 和 c 共用同一结构）
+    # 15列 SPC 表格，第5-14列（索引4-13）表头竖向排列
     _build_spc15_table(doc, data.get('spc_setup_rows', []), page_w_cm, prefix='setup')
 
-    # Bullet 说明
     for note in data.get('spc_setup_notes', [
         'Oper: refer to SPC++ documentation.',
         'Class: refer to SPC++ documentation.',
@@ -996,15 +869,14 @@ def _build_section10(doc, data, page_w_cm):
     ]):
         bp = doc.add_paragraph(style='List Bullet')
         bp.paragraph_format.space_before = Pt(2)
-        bp.paragraph_format.space_after  = Pt(2)
+        bp.paragraph_format.space_after = Pt(2)
         _para_add_run(bp, note, size_pt=10)
 
-    # ---------- c. SPC Rules ----------
     _add_sub_item(doc, 'c.', 'SPC Rules: (check one and fill out table below)')
 
     rules_sel = data.get('spc_rules', 'no_changes')
     rules_options = [
-        ('no_rules',   'No Rules Set'),
+        ('no_rules', 'No Rules Set'),
         ('no_changes', 'No Changes Proposed'),
     ]
     tbl_c = doc.add_table(rows=len(rules_options), cols=2)
@@ -1023,54 +895,49 @@ def _build_section10(doc, data, page_w_cm):
         _set_cell_no_padding(c1)
         _cell_write(c1, label, size_pt=10, valign='center')
 
-    # 说明文字
     p_note = doc.add_paragraph()
     p_note.paragraph_format.space_before = Pt(4)
-    p_note.paragraph_format.space_after  = Pt(4)
+    p_note.paragraph_format.space_after = Pt(4)
     _para_add_run(p_note, data.get('spc_rules_note',
-        'Complete the following if there are changes in rules, note present rules.'),
-        size_pt=10)
+                                   'Complete the following if there are changes in rules, note present rules.'),
+                  size_pt=10)
 
-    # c 的 SPC 表格
+    # c 的 SPC 表格，同样第5-14列表头竖向
     _build_spc15_table(doc, data.get('spc_rules_rows', []), page_w_cm, prefix='rules')
 
-    # Rules 图例表
     _build_rules_legend(doc, page_w_cm)
 
-    # 自定义规则说明
     p_custom = doc.add_paragraph()
     p_custom.paragraph_format.space_before = Pt(4)
-    p_custom.paragraph_format.space_after  = Pt(4)
+    p_custom.paragraph_format.space_after = Pt(4)
     _para_add_run(p_custom,
-        'If you have more custom rules that do not fit the standard rule codes above, '
-        'provide details here.', size_pt=10)
+                  'If you have more custom rules that do not fit the standard rule codes above, '
+                  'provide details here.', size_pt=10)
 
-    # ---------- d. Control Chart Data Summary ----------
     _add_sub_item(doc, 'd.', 'Control Chart Data Summary:')
 
-    # d 的说明文字
     p_d = doc.add_paragraph()
     p_d.paragraph_format.space_before = Pt(2)
-    p_d.paragraph_format.space_after  = Pt(4)
+    p_d.paragraph_format.space_after = Pt(4)
     _para_add_run(p_d, data.get('data_summary_note',
-        'Select type of limits, and explain assumptions. Expect ☒ for CEI monitor sets, '
-        'with VF-Common limits, except where required for local calibration wafer sets, '
-        'or where both matching data and Fab-specific deviation.'),
-        size_pt=10)
+                                'Select type of limits, and explain assumptions. Expect ☒ for CEI monitor sets, '
+                                'with VF-Common limits, except where required for local calibration wafer sets, '
+                                'or where both matching data and Fab-specific deviation.'),
+                  size_pt=10)
 
-    # d 的 3行×2列复选框表格（Tool-Specific / Fab-Specific / VF-Common）
     ds_sel = data.get('data_summary_type', 'vf_common')
     ds_options = [
         ('tool_specific', 'Tool-Specific'),
-        ('fab_specific',  'Fab-Specific  (First time CEI deviation need to show justification of why fabs are different)'),
-        ('vf_common',     'VF-Common'),
+        ('fab_specific',
+         'Fab-Specific  (First time CEI deviation need to show justification of why fabs are different)'),
+        ('vf_common', 'VF-Common'),
     ]
     tbl_d = doc.add_table(rows=len(ds_options), cols=2)
     tbl_d.autofit = False
     _set_table_no_borders(tbl_d)
     _set_table_indent(tbl_d, 2.54)
-    ds_cb_tw    = int(0.3  * 1440)
-    ds_label_tw = int(4.5  * 1440)
+    ds_cb_tw = int(0.3 * 1440)
+    ds_label_tw = int(4.5 * 1440)
     _set_table_total_width(tbl_d, (ds_cb_tw + ds_label_tw) / 1440)
     for i, (key, label) in enumerate(ds_options):
         row = tbl_d.rows[i]
@@ -1085,19 +952,15 @@ def _build_section10(doc, data, page_w_cm):
 
 
 def _build_section11(doc, data, page_w_cm):
-    """
-    11) Specific Checklists
-    说明文字 + 4行×3列表格（Item / Embedded Document(s) / Comments）
-    """
     _add_heading(doc, '11) Specific Checklists:')
 
     p = doc.add_paragraph()
     p.paragraph_format.space_before = Pt(2)
-    p.paragraph_format.space_after  = Pt(4)
+    p.paragraph_format.space_after = Pt(4)
     _para_add_run(p, data.get('checklist_note',
-        'Attach all appropriate checklists. Applicable checklist and worksheet to be obtained from '
-        '"Handbook and Templates".'),
-        size_pt=10)
+                              'Attach all appropriate checklists. Applicable checklist and worksheet to be obtained from '
+                              '"Handbook and Templates".'),
+                  size_pt=10)
 
     total_twip = int(page_w_cm / 2.54 * 1440)
     col0_tw = int(total_twip * 0.38)
@@ -1105,10 +968,10 @@ def _build_section11(doc, data, page_w_cm):
     col2_tw = total_twip - col0_tw - col1_tw
 
     checklist_rows = data.get('checklist_rows', [
-        {'item': 'APC Add/Change Checklist',           'doc': 'N/A', 'comments': ''},
+        {'item': 'APC Add/Change Checklist', 'doc': 'N/A', 'comments': ''},
         {'item': 'Software/Firmware Change Checklist', 'doc': 'N/A', 'comments': ''},
-        {'item': 'Monitor Sampling Reduction Worksheet','doc': 'N/A', 'comments': ''},
-        {'item': 'Other:',                             'doc': 'N/A', 'comments': ''},
+        {'item': 'Monitor Sampling Reduction Worksheet', 'doc': 'N/A', 'comments': ''},
+        {'item': 'Other:', 'doc': 'N/A', 'comments': ''},
     ])
 
     tbl = doc.add_table(rows=1 + len(checklist_rows), cols=3)
@@ -1116,17 +979,14 @@ def _build_section11(doc, data, page_w_cm):
     tbl.autofit = False
     _set_table_total_width(tbl, page_w_cm / 2.54)
 
-    # 表头
     for j, (txt, tw) in enumerate(zip(
             ['Item', 'Embedded Document(s)', 'Comments'],
             [col0_tw, col1_tw, col2_tw])):
         c = tbl.rows[0].cells[j]
         c.width = Cm(tw / 567)
-        _cell_write(c, txt, bold=True, size_pt=10,
-                    align=WD_ALIGN_PARAGRAPH.CENTER, valign='center')
+        _cell_write(c, txt, bold=True, size_pt=10, align=1, valign='center')
         _set_cell_shading(c, HEADER_BG)
 
-    # 数据行
     for i, rec in enumerate(checklist_rows):
         row = tbl.rows[i + 1]
         for j, (key, tw) in enumerate(zip(
@@ -1137,66 +997,62 @@ def _build_section11(doc, data, page_w_cm):
             val = rec.get(key, '')
             color = BLUE if key == 'doc' and val and val != '' else None
             _cell_write(c, val, size_pt=10, color=color,
-                        align=WD_ALIGN_PARAGRAPH.CENTER if key == 'doc' else WD_ALIGN_PARAGRAPH.LEFT,
+                        align=1 if key == 'doc' else 0,
                         valign='center')
             _set_cell_shading(c, 'FFFFFF')
 
 
 def _build_section12(doc, data):
-    """
-    12) Data Details
-    标题 + 括号说明文字（正文）+ 数据内容区（可选）
-    """
     _add_heading(doc, '12) Data Details')
 
     p = doc.add_paragraph()
     p.paragraph_format.space_before = Pt(2)
-    p.paragraph_format.space_after  = Pt(6)
+    p.paragraph_format.space_after = Pt(6)
     _para_add_run(p, data.get('data_details_note',
-        '(Include and clearly label all tables, key graphs and data summaries that support the intended '
-        'change, additionally summarize and document, including data as an attachment is strongly preferred.)'),
-        size_pt=10, italic=True)
+                              '(Include and clearly label all tables, key graphs and data summaries that support the intended '
+                              'change, additionally summarize and document, including data as an attachment is strongly preferred.)'),
+                  size_pt=10, italic=True)
 
-    # 可选：若有 data_details_items 则逐条输出（蓝色标题+图表占位）
     for item in data.get('data_details_items', []):
         p_item = doc.add_paragraph()
         p_item.paragraph_format.space_before = Pt(4)
-        p_item.paragraph_format.space_after  = Pt(2)
+        p_item.paragraph_format.space_after = Pt(2)
         _para_add_run(p_item, item.get('title', ''), bold=True, color=BLUE, size_pt=10)
         if item.get('description'):
             p_desc = doc.add_paragraph()
             p_desc.paragraph_format.space_before = Pt(0)
-            p_desc.paragraph_format.space_after  = Pt(4)
+            p_desc.paragraph_format.space_after = Pt(4)
             _para_add_run(p_desc, item['description'], size_pt=10)
 
 
 def _build_spc15_table(doc, data_rows, page_w_cm, prefix='setup'):
     """
-    SPC 15列宽表格（Section 10b / 10c 共用）。
-    列：Oper | SPC_FUNCTIONAL_AREA | MONITOR_SET_NAME | MEASUREMENT_SET_NAME |
-        CHART_SUBSET/NUMBER | TYPE | LCL | CL | TARGET | LDL | UDL | LUL | UBL | Class | Calc Method
+    SPC 15列表格。前4列（Oper/SPC_AREA/MONITOR/MEASUREMENT）横排，
+    第5-14列（CHART_SUBSET~UBL，索引4-13）表头竖向排列，第15列（Calc Method）横排。
     """
     total_twip = int(page_w_cm / 2.54 * 1440)
 
-    # 各列 twip（合计 = total_twip）
     col_defs = [
-        ('Oper',                  0.045),
+        ('Oper',                    0.045),
         ('SPC_\nFUNCTIONAL\n_AREA', 0.085),
-        ('MONITOR_\nSET_NAME',    0.090),
-        ('MEASUREMENT\n_SET_NAME',0.095),
-        ('CHART_\nSUBSET/\nNUMBER', 0.060),
-        ('TYPE',                  0.050),
-        ('LCL',                   0.055),
-        ('CL',                    0.055),
-        ('TARGET',                0.060),
-        ('LDL',                   0.050),
-        ('UDL',                   0.050),
-        ('LUL',                   0.050),
-        ('UBL',                   0.050),
-        ('Class',                 0.060),
-        ('Calc\nMethod',          0.095),
+        ('MONITOR_\nSET_NAME',      0.090),
+        ('MEASUREMENT\n_SET_NAME',  0.095),
+        ('CHART\nSUBSET/\nNUMBER',  0.060),  # 索引4，开始竖排
+        ('TYPE',                    0.050),
+        ('LCL',                     0.055),
+        ('CL',                      0.055),
+        ('TARGET',                  0.060),
+        ('LDL',                     0.050),
+        ('UDL',                     0.050),
+        ('LUL',                     0.050),
+        ('UBL',                     0.050),  # 索引12，竖排结束
+        ('Class',                   0.060),
+        ('Calc\nMethod',            0.095),
     ]
-    # 归一化确保列宽合计精确等于 total_twip
+    # 竖排列索引范围：4~12（含）
+    VERTICAL_HDR_START = 4
+    VERTICAL_HDR_END   = 12   # inclusive
+
     ratio_sum = sum(r for _, r in col_defs)
     col_twips = [int(total_twip * r / ratio_sum) for _, r in col_defs]
     col_twips[-1] = total_twip - sum(col_twips[:-1])
@@ -1208,14 +1064,24 @@ def _build_spc15_table(doc, data_rows, page_w_cm, prefix='setup'):
     tbl.autofit = False
     _set_table_total_width(tbl, page_w_cm / 2.54)
 
+    # 竖排表头行需要固定一个较高的高度，让竖向文字能显示
+    _set_row_height(tbl.rows[0], 1.5)
+
     for j, (hdr, tw) in enumerate(zip(col_headers, col_twips)):
         c = tbl.rows[0].cells[j]
         c.width = Cm(tw / 567)
-        _cell_write(c, hdr, bold=True, size_pt=8,
-                    align=WD_ALIGN_PARAGRAPH.CENTER, valign='center')
         _set_cell_shading(c, HEADER_BG)
 
-    # 数据行 / 空行
+        if VERTICAL_HDR_START <= j <= VERTICAL_HDR_END:
+            # 竖向：去掉 \n，改用无换行的单一字符串，设置文字方向 btLr
+            hdr_clean = hdr.replace('\n', '')
+            _cell_write(c, hdr_clean, bold=True, size_pt=7,
+                        align=1, valign='center')
+            _set_cell_text_direction(c, 'btLr')
+        else:
+            _cell_write(c, hdr, bold=True, size_pt=7,
+                        align=1, valign='center')
+
     rows_to_fill = data_rows if data_rows else [{} for _ in range(3)]
     keys = ['oper', 'spc_area', 'monitor_set', 'measurement_set',
             'subset_num', 'type', 'lcl', 'cl', 'target',
@@ -1225,44 +1091,42 @@ def _build_spc15_table(doc, data_rows, page_w_cm, prefix='setup'):
         for j, (key, tw) in enumerate(zip(keys, col_twips)):
             c = row.cells[j]
             c.width = Cm(tw / 567)
-            _cell_write(c, rec.get(key, ''), size_pt=8, valign='center')
+            _cell_write(c, rec.get(key, ''), size_pt=7, valign='center')
             _set_cell_shading(c, 'FFFFFF')
 
     return tbl
 
 
 def _build_rules_legend(doc, page_w_cm):
-    """Rules 图例说明段落 + 两列对照小表"""
     p = doc.add_paragraph()
     p.paragraph_format.space_before = Pt(6)
-    p.paragraph_format.space_after  = Pt(2)
+    p.paragraph_format.space_after = Pt(2)
     r = p.add_run('*Rules are denoted as follows:')
     _set_run_font(r, size_pt=9, bold=False)
 
     legend = [
-        ('A',    '> UCL'),
-        ('B',    '2/1 > 2 SIGMA'),
-        ('C',    '4/5 > 1 SIGMA'),
-        ('D',    'Last 8 > CL'),
-        ('E',    '< LCL'),
-        ('F',    '2/3 < -2 SIGMA'),
-        ('G',    '4/5 < -1 SIGMA'),
-        ('H',    'Last 8 < CL'),
-        ('I',    '15 Inside SIGMA'),
-        ('J',    '8 Outside SIGMA'),
-        ('K',    '> UDL'),
-        ('L',    '< LDL'),
-        ('M',    'Missing Data'),
-        ('N',    'Fail Disposition'),
-        ('',     'No Limits'),
+        ('A', '> UCL'),
+        ('B', '2/1 > 2 SIGMA'),
+        ('C', '4/5 > 1 SIGMA'),
+        ('D', 'Last 8 > CL'),
+        ('E', '< LCL'),
+        ('F', '2/3 < -2 SIGMA'),
+        ('G', '4/5 < -1 SIGMA'),
+        ('H', 'Last 8 < CL'),
+        ('I', '15 Inside SIGMA'),
+        ('J', '8 Outside SIGMA'),
+        ('K', '> UDL'),
+        ('L', '< LDL'),
+        ('M', 'Missing Data'),
+        ('N', 'Fail Disposition'),
+        ('', 'No Limits'),
         ('NONE', 'No OOC Rules'),
     ]
 
-    # 每行4条，共4列（code + desc 交替）
     cols_per_row = 4
-    total_twip   = int(page_w_cm / 2.54 * 1440)
-    code_twip    = int(total_twip / cols_per_row * 0.25)
-    desc_twip    = int(total_twip / cols_per_row * 0.75)
+    total_twip = int(page_w_cm / 2.54 * 1440)
+    code_twip = int(total_twip / cols_per_row * 0.25)
+    desc_twip = int(total_twip / cols_per_row * 0.75)
     n_rows = (len(legend) + cols_per_row - 1) // cols_per_row
 
     tbl = doc.add_table(rows=n_rows, cols=cols_per_row * 2)
@@ -1283,7 +1147,6 @@ def _build_rules_legend(doc, page_w_cm):
 
 
 def _add_page_num_field(para):
-    """在段落末尾插入 PAGE 自动页码域（w:fldChar + w:instrText + w:fldChar）"""
     run = para.add_run()
     run.font.size = Pt(9)
     rPr = run._r.get_or_add_rPr()
@@ -1294,12 +1157,10 @@ def _add_page_num_field(para):
     for attr in ('w:ascii', 'w:hAnsi', 'w:cs'):
         rFonts.set(qn(attr), 'Arial')
 
-    # begin
     fc_begin = OxmlElement('w:fldChar')
     fc_begin.set(qn('w:fldCharType'), 'begin')
     run._r.append(fc_begin)
 
-    # instrText
     run2 = para.add_run()
     run2.font.size = Pt(9)
     instr = OxmlElement('w:instrText')
@@ -1307,7 +1168,6 @@ def _add_page_num_field(para):
     instr.text = ' PAGE '
     run2._r.append(instr)
 
-    # separate + end
     run3 = para.add_run()
     run3.font.size = Pt(9)
     fc_sep = OxmlElement('w:fldChar')
@@ -1322,12 +1182,10 @@ def _add_page_num_field(para):
 
 
 def _build_footer(doc, data):
-    """在第一个 section 的页脚写入三栏内容：左-中-右"""
     sec = doc.sections[0]
     footer = sec.footer
     footer.is_linked_to_previous = False
 
-    # 清空已有段落
     for p in footer.paragraphs:
         p.clear()
 
@@ -1335,81 +1193,52 @@ def _build_footer(doc, data):
     fp.paragraph_format.space_before = Pt(0)
     fp.paragraph_format.space_after = Pt(0)
 
-    left_text   = data.get('footer_left',   'Intel Confidential')
+    left_text = data.get('footer_left', 'Intel Confidential')
     center_text = data.get('footer_center', 'WLA CCB Monitor Change White Paper')
-    right_text  = data.get('footer_right',  'Rev 1.0')
 
-    # 利用制表符实现左-中-右三栏布局
-    # 段落格式：居中制表位 + 右对齐制表位
     from docx.oxml import OxmlElement as _el
     pPr = fp._p.get_or_add_pPr()
     tabs = _el('w:tabs')
 
     tab_center = _el('w:tab')
     tab_center.set(qn('w:val'), 'center')
-    tab_center.set(qn('w:pos'), '4680')   # 约页面中央（9360 twip / 2）
+    tab_center.set(qn('w:pos'), '4680')
 
     tab_right = _el('w:tab')
     tab_right.set(qn('w:val'), 'right')
-    tab_right.set(qn('w:pos'), '9360')    # 右边界
+    tab_right.set(qn('w:pos'), '9360')
 
     tabs.append(tab_center)
     tabs.append(tab_right)
     pPr.append(tabs)
 
-    _para_add_run(fp, left_text,   size_pt=9)
-    _para_add_run(fp, '\t',        size_pt=9)
+    _para_add_run(fp, left_text, size_pt=9)
+    _para_add_run(fp, '\t', size_pt=9)
     _para_add_run(fp, center_text, size_pt=9)
-    _para_add_run(fp, '\t',        size_pt=9)
-    # "Page " 纯文字 + 自动页码域 fldChar
-    _para_add_run(fp, 'Page ',     size_pt=9)
+    _para_add_run(fp, '\t', size_pt=9)
+    _para_add_run(fp, 'Page ', size_pt=9)
     _add_page_num_field(fp)
 
 
 def _apply_doc_settings(doc, page_w_cm=21.59, page_h_cm=27.94):
-    """页面设置（A4 竖向，2.54cm 边距）"""
     sec = doc.sections[0]
-    sec.page_width  = Cm(page_w_cm)
+    sec.page_width = Cm(page_w_cm)
     sec.page_height = Cm(page_h_cm)
-    sec.left_margin   = Cm(2.54)
-    sec.right_margin  = Cm(2.54)
-    sec.top_margin    = Cm(2.54)
+    sec.left_margin = Cm(2.54)
+    sec.right_margin = Cm(2.54)
+    sec.top_margin = Cm(2.54)
     sec.bottom_margin = Cm(2.54)
 
 
 def build_wla_ccb_document(data: dict) -> bytes:
     """
     生成 WLA CCB Monitor Change White Paper 文档。
-
-    参数
-    ----
-    data : dict
-        文档内容字典，支持以下键（均有默认值，可按需覆盖）：
-
-        fwp_horizon      str   FWP Horizon 编号，默认 'N/a'
-        pccb_member      str   PCCB 成员名，默认 'N/A'
-        reference_wps    list  [{'horizon': ..., 'title': ...}]，默认 [{'horizon':'N/a','title':'N/a'}]
-        date             str   日期，默认 '04/02/2026'
-        primary_author   str   主要作者，默认 'Yuan, Ji'
-        site             str   站点，默认 'CDDP'
-        co_authors       str   合著者，默认 ''
-        title_of_change  str   变更标题
-        equipment_tool_set  str
-        products_affected   str
-        change_rows      list  每条变更记录 dict，包含：
-            number, monitor_set, measurement_set, chart_type
-            present_ucl, present_cl, present_lcl, present_clsr_flag
-            proposed_ucl, proposed_cl, proposed_lcl, proposed_clsr_flag
-
-    返回
-    ----
-    bytes : 可直接作为 HTTP 响应体或写入 .docx 文件。
+    返回 bytes，可直接作为 HTTP 响应体或写入 .docx 文件。
     """
     doc = Document()
     _apply_doc_settings(doc)
 
-    # A4 内容区宽度 = 21.59 - 2.54*2
-    page_w_cm = 21.59 - 2.54 * 2   # ≈ 16.51 cm
+    page_w_cm = 21.59 - 2.54 * 2  # ≈ 16.51 cm
 
     _build_title(doc)
     _build_section1(doc, data, page_w_cm)
@@ -1446,14 +1275,15 @@ def main():
         'title_of_change': 'CD DGB chart limit change for CLSR flag',
         'equipment_tool_set': 'EUV_Tool_A / CEID-12345',
         'products_affected': 'All',
-        'footer_left':   'Intel Confidential',
+        'footer_left': 'Intel Confidential',
         'footer_center': 'WLA CCB Monitor Change White Paper',
-        'footer_right':  'Rev 1.0',
+        'footer_right': 'Rev 1.0',
         'reason_for_change': 'To tighten the limit for CLSR flagging',
         'cei_owners': [
             {'name': 'Owner A', 'site': 'CDDP', 'date': '04/02/2026'},
         ],
         'cei_note': 'Any owners responsible for both FWP and PWP stages.',
+        'concerns_note': 'Any owners responsible for both FWP and PWP stages.',
         'spec_rows': [
             {'spec_num': 'N/a', 'title': 'N/a'},
         ],
@@ -1475,14 +1305,12 @@ def main():
                 'measurement_set': 'MEAS_SET_001',
                 'chart_type': 'CLSR',
                 'limits': [
-                    {'label': 'UCL',        'present': '493',  'proposed': '488.4'},
-                    {'label': 'Centerline', 'present': '487',  'proposed': '487'},
-                    {'label': 'LCL',        'present': '481',  'proposed': '485.6'},
-                    # CLSR 有数值 + Flag 标记，present 超限显示红色 flag，proposed 无 flag
+                    {'label': 'UCL', 'present': '493', 'proposed': '488.4'},
+                    {'label': 'Centerline', 'present': '487', 'proposed': '487'},
+                    {'label': 'LCL', 'present': '481', 'proposed': '485.6'},
                     {'label': 'CLSR',
                      'present': '17.4', 'present_flag': 'Flag', 'present_flag_color': 'red',
-                     'proposed': '4',   'proposed_flag': '',
-                    },
+                     'proposed': '4', 'proposed_flag': ''},
                 ],
             },
             {
@@ -1491,13 +1319,12 @@ def main():
                 'measurement_set': 'MEAS_SET_002',
                 'chart_type': 'CLSR',
                 'limits': [
-                    {'label': 'UCL',        'present': '350.25', 'proposed': '352.0'},
+                    {'label': 'UCL', 'present': '350.25', 'proposed': '352.0'},
                     {'label': 'Centerline', 'present': '348.10', 'proposed': '348.1'},
-                    {'label': 'LCL',        'present': '345.95', 'proposed': '344.2'},
+                    {'label': 'LCL', 'present': '345.95', 'proposed': '344.2'},
                     {'label': 'CLSR',
                      'present': '8.2', 'present_flag': 'Flag', 'present_flag_color': 'green',
-                     'proposed': '2',  'proposed_flag': '',
-                    },
+                     'proposed': '2', 'proposed_flag': ''},
                 ],
             },
             {
@@ -1506,27 +1333,24 @@ def main():
                 'measurement_set': 'MEAS_SET_003',
                 'chart_type': 'CLSR',
                 'limits': [
-                    {'label': 'UCL',        'present': '2.90', 'proposed': '3.10'},
+                    {'label': 'UCL', 'present': '2.90', 'proposed': '3.10'},
                     {'label': 'Centerline', 'present': '1.80', 'proposed': '1.90'},
-                    {'label': 'LCL',        'present': '0.70', 'proposed': '0.70'},
-                    {'label': 'CLSR',       'present': '1.2',  'proposed': '0.8'},
+                    {'label': 'LCL', 'present': '0.70', 'proposed': '0.70'},
+                    {'label': 'CLSR', 'present': '1.2', 'proposed': '0.8'},
                 ],
             },
         ],
         'data_summary_type': 'vf_common',
         'checklist_rows': [
-            {'item': 'APC Add/Change Checklist',            'doc': 'N/A', 'comments': ''},
-            {'item': 'Software/Firmware Change Checklist',  'doc': 'N/A', 'comments': ''},
-            {'item': 'Monitor Sampling Reduction Worksheet','doc': 'N/A', 'comments': ''},
-            {'item': 'Other:',                              'doc': 'N/A', 'comments': ''},
+            {'item': 'APC Add/Change Checklist', 'doc': 'N/A', 'comments': ''},
+            {'item': 'Software/Firmware Change Checklist', 'doc': 'N/A', 'comments': ''},
+            {'item': 'Monitor Sampling Reduction Worksheet', 'doc': 'N/A', 'comments': ''},
+            {'item': 'Other:', 'doc': 'N/A', 'comments': ''},
         ],
         'data_details_items': [
-            {'title': '1. X-bar Control Limit Summary for "Value" (Statistical)',
-             'description': ''},
-            {'title': '2. X-bar_CG',
-             'description': ''},
-            {'title': '3. X-bar_LG',
-             'description': ''},
+            {'title': '1. X-bar Control Limit Summary for "Value" (Statistical)', 'description': ''},
+            {'title': '2. X-bar_CG', 'description': ''},
+            {'title': '3. X-bar_LG', 'description': ''},
         ],
     }
 
