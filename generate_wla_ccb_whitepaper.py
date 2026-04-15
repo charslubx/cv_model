@@ -842,7 +842,6 @@ def _build_section10(doc, data, page_w_cm):
     _set_table_total_width(tbl_a, (checkbox_tw + label_tw) / 1440)
     for i, (key, label) in enumerate(mod_options):
         row = tbl_a.rows[i]
-        _set_row_height(row, 0.55)
         mark = '☒' if mod_sel == key else '☐'
         c0 = row.cells[0]
         c0.width = Cm(checkbox_tw / 567)
@@ -856,7 +855,7 @@ def _build_section10(doc, data, page_w_cm):
     # ---------- b. Chart By：4行×4列无边框表格（每行两个选项，每选项=☐+说明各占一格）----------
     _add_sub_item(doc, 'b.', 'Chart By: (check one and fill out table below, only needed for New Chart Creation)')
 
-    chart_by = data.get('chart_by', '')
+    chart_by = data.get('chart_by', 'all_categories')
     cb_options = [
         [('equipment',      'Equipment'),             ('all_categories', 'All Categories')],
         [('monitor',        'Monitor'),               ('process',        'Process')],
@@ -872,7 +871,6 @@ def _build_section10(doc, data, page_w_cm):
     _set_table_total_width(tbl_b, (cb_tw + cb_label_tw) * 2 / 1440)
     for i, row_opts in enumerate(cb_options):
         row = tbl_b.rows[i]
-        _set_row_height(row, 0.55)
         for col_pair, (key, label) in enumerate(row_opts):
             c_chk = row.cells[col_pair * 2]
             c_chk.width = Cm(cb_tw / 567)
@@ -904,16 +902,26 @@ def _build_section10(doc, data, page_w_cm):
     _add_sub_item(doc, 'c.', 'SPC Rules: (check one and fill out table below)')
 
     rules_sel = data.get('spc_rules', 'no_changes')
-    for key, label in [
-        ('no_rules',    'No Rules Set'),
-        ('no_changes',  'No Changes Proposed'),
-    ]:
-        p = doc.add_paragraph()
-        p.paragraph_format.left_indent  = Cm(2.54)
-        p.paragraph_format.space_before = Pt(1)
-        p.paragraph_format.space_after  = Pt(1)
+    rules_options = [
+        ('no_rules',   'No Rules Set'),
+        ('no_changes', 'No Changes Proposed'),
+    ]
+    tbl_c = doc.add_table(rows=len(rules_options), cols=2)
+    tbl_c.autofit = False
+    _set_table_no_borders(tbl_c)
+    _set_table_indent(tbl_c, 2.54)
+    _set_table_total_width(tbl_c, (checkbox_tw + label_tw) / 1440)
+    for i, (key, label) in enumerate(rules_options):
+        row = tbl_c.rows[i]
         mark = '☒' if rules_sel == key else '☐'
-        _para_add_run(p, f'{mark}    {label}', size_pt=10)
+        c0 = row.cells[0]
+        c0.width = Cm(checkbox_tw / 567)
+        _set_cell_no_padding(c0)
+        _cell_write(c0, mark, size_pt=10, align=WD_ALIGN_PARAGRAPH.CENTER, valign='center')
+        c1 = row.cells[1]
+        c1.width = Cm(label_tw / 567)
+        _set_cell_no_padding(c1)
+        _cell_write(c1, label, size_pt=10, valign='center')
 
     # 说明文字
     p_note = doc.add_paragraph()
@@ -979,7 +987,6 @@ def _build_spc15_table(doc, data_rows, page_w_cm, prefix='setup'):
     tbl.autofit = False
     _set_table_total_width(tbl, page_w_cm / 2.54)
 
-    _set_row_height(tbl.rows[0], 1.3)
     for j, (hdr, tw) in enumerate(zip(col_headers, col_twips)):
         c = tbl.rows[0].cells[j]
         c.width = Cm(tw / 567)
@@ -994,7 +1001,6 @@ def _build_spc15_table(doc, data_rows, page_w_cm, prefix='setup'):
             'ldl', 'udl', 'lul', 'ubl', 'class_', 'calc_method']
     for rec in rows_to_fill:
         row = tbl.add_row()
-        _set_row_height(row, 0.65)
         for j, (key, tw) in enumerate(zip(keys, col_twips)):
             c = row.cells[j]
             c.width = Cm(tw / 567)
@@ -1047,7 +1053,6 @@ def _build_rules_legend(doc, page_w_cm):
     for i, (code, desc) in enumerate(legend):
         ri = i // cols_per_row
         ci = (i % cols_per_row) * 2
-        _set_row_height(tbl.rows[ri], 0.4)
         c_code = tbl.rows[ri].cells[ci]
         c_code.width = Cm(code_twip / 567)
         _cell_write(c_code, code, size_pt=8, bold=True, valign='center')
