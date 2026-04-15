@@ -556,12 +556,77 @@ def _build_change_table(doc, data, page_w_cm):
 # ---------------------------------------------------------------------------
 
 def _build_page2(doc, data, page_w_cm):
-    """第二页：第6-9节"""
-    doc.add_page_break()
+    """第二页：第6-9节（自然排版，无强制分页符）"""
     _build_section6(doc, data)
     _build_section7(doc, data, page_w_cm)
     _build_section8(doc, data, page_w_cm)
     _build_section9(doc, data, page_w_cm)
+
+
+def _build_section5_fwp_table(doc, data, page_w_cm):
+    """
+    5) a. (FWP only)* 子项 + Previous/Current value 对比表。
+    紧跟在 c. Specific change items 的嵌套表之后。
+    """
+    # a. (FWP only)* 子项 —— Heading 2
+    p = doc.add_paragraph(style='Heading 2')
+    p.paragraph_format.left_indent = Cm(1.27)
+    p.paragraph_format.first_line_indent = Cm(-0.63)
+    p.paragraph_format.space_before = Pt(4)
+    p.paragraph_format.space_after = Pt(2)
+    p.clear()
+    _set_font_name(p.add_run('a.  '), size_pt=10, color=BLACK)
+    r_fwp = p.add_run('(FWP only)*')
+    _set_font_name(r_fwp, size_pt=10, color=BLACK)
+    r_fwp.font.bold = True
+    desc = data.get(
+        'fwp_only_desc',
+        ' Incorporate the C-Spec (or equivalent) into the PWP Control Plan for '
+        'future PWP versions. Otherwise, leave this blank.'
+    )
+    _set_font_name(p.add_run(desc), size_pt=10, color=BLACK)
+
+    # 三列表格：# | Change items | Previous value | Current value
+    total_twip = int(page_w_cm / 2.54 * 1440)
+    num_twip   = int(0.4 * 1440)
+    val_twip   = int(2.2 * 1440)
+    items_twip = total_twip - num_twip - val_twip * 2
+
+    col_twips = [num_twip, items_twip, val_twip, val_twip]
+    headers   = ['#', 'Change items', 'Previous value', 'Current value']
+
+    tbl = doc.add_table(rows=1, cols=4)
+    tbl.style = 'Table Grid'
+    tbl.autofit = False
+    _set_table_total_width(tbl, page_w_cm / 2.54)
+
+    _set_row_height(tbl.rows[0], 0.6)
+    for j, (txt, tw) in enumerate(zip(headers, col_twips)):
+        c = tbl.rows[0].cells[j]
+        c.width = Cm(tw / 567)
+        _cell_write(c, txt, bold=True, size_pt=10,
+                    align=WD_ALIGN_PARAGRAPH.CENTER, valign='center')
+        _set_cell_shading(c, HEADER_BG)
+
+    fwp_rows = data.get('fwp_change_rows', [])
+    for rec in fwp_rows:
+        row = tbl.add_row()
+        _set_row_height(row, 0.8)
+        for j, (key, tw) in enumerate(
+                zip(['number', 'change_item', 'previous_value', 'current_value'],
+                    col_twips)):
+            c = row.cells[j]
+            c.width = Cm(tw / 567)
+            _cell_write(c, rec.get(key, ''), size_pt=10, valign='top')
+            _set_cell_shading(c, 'FFFFFF')
+
+    # 若无数据补两个空行
+    if not fwp_rows:
+        for _ in range(2):
+            row = tbl.add_row()
+            _set_row_height(row, 0.6)
+            for j, tw in enumerate(col_twips):
+                row.cells[j].width = Cm(tw / 567)
 
 
 def _build_section6(doc, data):
@@ -841,6 +906,7 @@ def build_wla_ccb_document(data: dict) -> bytes:
     _build_section4(doc, data)
     _build_section5_header(doc, data)
     _build_change_table(doc, data, page_w_cm)
+    _build_section5_fwp_table(doc, data, page_w_cm)
     _build_page2(doc, data, page_w_cm)
     _build_footer(doc, data)
 
