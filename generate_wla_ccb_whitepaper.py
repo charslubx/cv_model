@@ -811,6 +811,228 @@ def _build_section9(doc, data, page_w_cm):
             for j, tw in enumerate(col_twips):
                 row.cells[j].width = Cm(tw / 567)
 
+def _build_section10(doc, data, page_w_cm):
+    """10) Control Chart Setup"""
+
+    # ---------- 10) 标题 ----------
+    p = doc.add_paragraph(style='Heading 1')
+    p.paragraph_format.space_before = Pt(10)
+    p.paragraph_format.space_after  = Pt(4)
+    p.clear()
+    _set_font_name(p.add_run(
+        '10) Control Chart Setup: Only fill in section for SPC++ changes or SPC# chart creation'
+    ), size_pt=12, color=BLACK)
+
+    # ---------- a. Chart Modification ----------
+    _add_sub_item(doc, 'a.', 'Chart Modification: (check one)')
+
+    mod_sel = data.get('chart_modification', 'revision')
+    for key, label in [
+        ('revision',   'Chart Revision'),
+        ('new',        'New Chart Creation. Please\ncomplete section 10b.'),
+        ('deletion',   'Chart Deletion'),
+    ]:
+        p = doc.add_paragraph()
+        p.paragraph_format.left_indent    = Cm(2.54)
+        p.paragraph_format.space_before   = Pt(1)
+        p.paragraph_format.space_after    = Pt(1)
+        mark = '☒' if mod_sel == key else '☐'
+        _para_add_run(p, f'{mark}    {label}', size_pt=10)
+
+    # ---------- b. Chart By ----------
+    _add_sub_item(doc, 'b.', 'Chart By: (check one and fill out table below, only needed for New Chart Creation)')
+
+    chart_by = data.get('chart_by', '')
+    cb_options = [
+        [('equipment',  'Equipment'),      ('all_categories', 'All Categories')],
+        [('monitor',    'Monitor'),         ('process',        'Process')],
+        [('operation',  'Operation'),       ('custom_context', 'Custom Context Categories')],
+        [('product',    'Product'),         (None,             '')],
+    ]
+    for row_opts in cb_options:
+        p = doc.add_paragraph()
+        p.paragraph_format.left_indent  = Cm(2.54)
+        p.paragraph_format.space_before = Pt(1)
+        p.paragraph_format.space_after  = Pt(1)
+        parts = []
+        for key, label in row_opts:
+            if not label:
+                parts.append('')
+                continue
+            mark = '☒' if chart_by == key else '☐'
+            parts.append(f'{mark}  {label}')
+        _para_add_run(p, f'{parts[0]:<35}{parts[1]}', size_pt=10)
+
+    # 15列 SPC 表格（b 和 c 共用同一结构）
+    _build_spc15_table(doc, data.get('spc_setup_rows', []), page_w_cm, prefix='setup')
+
+    # Bullet 说明
+    for note in data.get('spc_setup_notes', [
+        'Oper: refer to SPC++ documentation.',
+        'Class: refer to SPC++ documentation.',
+        'Calc Method: (raw, percentage). For SPC#, Eng review required.',
+    ]):
+        bp = doc.add_paragraph(style='List Bullet')
+        bp.paragraph_format.space_before = Pt(2)
+        bp.paragraph_format.space_after  = Pt(2)
+        _para_add_run(bp, note, size_pt=10)
+
+    # ---------- c. SPC Rules ----------
+    _add_sub_item(doc, 'c.', 'SPC Rules: (check one and fill out table below)')
+
+    rules_sel = data.get('spc_rules', 'no_changes')
+    for key, label in [
+        ('no_rules',    'No Rules Set'),
+        ('no_changes',  'No Changes Proposed'),
+    ]:
+        p = doc.add_paragraph()
+        p.paragraph_format.left_indent  = Cm(2.54)
+        p.paragraph_format.space_before = Pt(1)
+        p.paragraph_format.space_after  = Pt(1)
+        mark = '☒' if rules_sel == key else '☐'
+        _para_add_run(p, f'{mark}    {label}', size_pt=10)
+
+    # 说明文字
+    p_note = doc.add_paragraph()
+    p_note.paragraph_format.space_before = Pt(4)
+    p_note.paragraph_format.space_after  = Pt(4)
+    _para_add_run(p_note, data.get('spc_rules_note',
+        'Complete the following if there are changes in rules, note present rules.'),
+        size_pt=10)
+
+    # c 的 SPC 表格
+    _build_spc15_table(doc, data.get('spc_rules_rows', []), page_w_cm, prefix='rules')
+
+    # Rules 图例表
+    _build_rules_legend(doc, page_w_cm)
+
+    # 自定义规则说明
+    p_custom = doc.add_paragraph()
+    p_custom.paragraph_format.space_before = Pt(4)
+    p_custom.paragraph_format.space_after  = Pt(4)
+    _para_add_run(p_custom,
+        'If you have more custom rules that do not fit the standard rule codes above, '
+        'provide details here.', size_pt=10)
+
+    # ---------- d. Control Chart Data Summary ----------
+    _add_sub_item(doc, 'd.', 'Control Chart Data Summary:')
+
+
+def _build_spc15_table(doc, data_rows, page_w_cm, prefix='setup'):
+    """
+    SPC 15列宽表格（Section 10b / 10c 共用）。
+    列：Oper | SPC_FUNCTIONAL_AREA | MONITOR_SET_NAME | MEASUREMENT_SET_NAME |
+        CHART_SUBSET/NUMBER | TYPE | LCL | CL | TARGET | LDL | UDL | LUL | UBL | Class | Calc Method
+    """
+    total_twip = int(page_w_cm / 2.54 * 1440)
+
+    # 各列 twip（合计 = total_twip）
+    col_defs = [
+        ('Oper',                  0.045),
+        ('SPC_\nFUNCTIONAL\n_AREA', 0.085),
+        ('MONITOR_\nSET_NAME',    0.090),
+        ('MEASUREMENT\n_SET_NAME',0.095),
+        ('CHART_\nSUBSET/\nNUMBER', 0.060),
+        ('TYPE',                  0.050),
+        ('LCL',                   0.055),
+        ('CL',                    0.055),
+        ('TARGET',                0.060),
+        ('LDL',                   0.050),
+        ('UDL',                   0.050),
+        ('LUL',                   0.050),
+        ('UBL',                   0.050),
+        ('Class',                 0.060),
+        ('Calc\nMethod',          0.095),
+    ]
+    # 归一化确保列宽合计精确等于 total_twip
+    ratio_sum = sum(r for _, r in col_defs)
+    col_twips = [int(total_twip * r / ratio_sum) for _, r in col_defs]
+    col_twips[-1] = total_twip - sum(col_twips[:-1])
+
+    col_headers = [h for h, _ in col_defs]
+
+    tbl = doc.add_table(rows=1, cols=len(col_defs))
+    tbl.style = 'Table Grid'
+    tbl.autofit = False
+    _set_table_total_width(tbl, page_w_cm / 2.54)
+
+    _set_row_height(tbl.rows[0], 1.3)
+    for j, (hdr, tw) in enumerate(zip(col_headers, col_twips)):
+        c = tbl.rows[0].cells[j]
+        c.width = Cm(tw / 567)
+        _cell_write(c, hdr, bold=True, size_pt=8,
+                    align=WD_ALIGN_PARAGRAPH.CENTER, valign='center')
+        _set_cell_shading(c, HEADER_BG)
+
+    # 数据行 / 空行
+    rows_to_fill = data_rows if data_rows else [{} for _ in range(3)]
+    keys = ['oper', 'spc_area', 'monitor_set', 'measurement_set',
+            'subset_num', 'type', 'lcl', 'cl', 'target',
+            'ldl', 'udl', 'lul', 'ubl', 'class_', 'calc_method']
+    for rec in rows_to_fill:
+        row = tbl.add_row()
+        _set_row_height(row, 0.65)
+        for j, (key, tw) in enumerate(zip(keys, col_twips)):
+            c = row.cells[j]
+            c.width = Cm(tw / 567)
+            _cell_write(c, rec.get(key, ''), size_pt=8, valign='center')
+            _set_cell_shading(c, 'FFFFFF')
+
+    return tbl
+
+
+def _build_rules_legend(doc, page_w_cm):
+    """Rules 图例说明段落 + 两列对照小表"""
+    p = doc.add_paragraph()
+    p.paragraph_format.space_before = Pt(6)
+    p.paragraph_format.space_after  = Pt(2)
+    r = p.add_run('*Rules are denoted as follows:')
+    _set_run_font(r, size_pt=9, bold=False)
+
+    legend = [
+        ('A',    '> UCL'),
+        ('B',    '2/1 > 2 SIGMA'),
+        ('C',    '4/5 > 1 SIGMA'),
+        ('D',    'Last 8 > CL'),
+        ('E',    '< LCL'),
+        ('F',    '2/3 < -2 SIGMA'),
+        ('G',    '4/5 < -1 SIGMA'),
+        ('H',    'Last 8 < CL'),
+        ('I',    '15 Inside SIGMA'),
+        ('J',    '8 Outside SIGMA'),
+        ('K',    '> UDL'),
+        ('L',    '< LDL'),
+        ('M',    'Missing Data'),
+        ('N',    'Fail Disposition'),
+        ('',     'No Limits'),
+        ('NONE', 'No OOC Rules'),
+    ]
+
+    # 每行4条，共4列（code + desc 交替）
+    cols_per_row = 4
+    total_twip   = int(page_w_cm / 2.54 * 1440)
+    code_twip    = int(total_twip / cols_per_row * 0.25)
+    desc_twip    = int(total_twip / cols_per_row * 0.75)
+    n_rows = (len(legend) + cols_per_row - 1) // cols_per_row
+
+    tbl = doc.add_table(rows=n_rows, cols=cols_per_row * 2)
+    tbl.style = 'Table Grid'
+    tbl.autofit = False
+    _set_table_total_width(tbl, page_w_cm / 2.54)
+    _set_table_no_borders(tbl)
+
+    for i, (code, desc) in enumerate(legend):
+        ri = i // cols_per_row
+        ci = (i % cols_per_row) * 2
+        _set_row_height(tbl.rows[ri], 0.4)
+        c_code = tbl.rows[ri].cells[ci]
+        c_code.width = Cm(code_twip / 567)
+        _cell_write(c_code, code, size_pt=8, bold=True, valign='center')
+        c_desc = tbl.rows[ri].cells[ci + 1]
+        c_desc.width = Cm(desc_twip / 567)
+        _cell_write(c_desc, desc, size_pt=8, valign='center')
+
+
 def _build_footer(doc, data):
     """在第一个 section 的页脚写入三栏内容：左-中-右"""
     sec = doc.sections[0]
@@ -908,6 +1130,7 @@ def build_wla_ccb_document(data: dict) -> bytes:
     _build_change_table(doc, data, page_w_cm)
     _build_section5_fwp_table(doc, data, page_w_cm)
     _build_page2(doc, data, page_w_cm)
+    _build_section10(doc, data, page_w_cm)
     _build_footer(doc, data)
 
     buf = io.BytesIO()
