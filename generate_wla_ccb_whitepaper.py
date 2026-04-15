@@ -137,8 +137,12 @@ def _para_add_run(para, text, font_name='Arial', size_pt=11,
     return run
 
 
-def _set_font_name(run, name='Arial'):
-    """只改字体名，不覆盖字号/粗细等其他属性（供 Heading 样式段落使用）"""
+def _set_font_name(run, name='Arial', size_pt=None, color=None):
+    """设置字体名（及可选的字号、颜色），不触碰 bold 让样式自己定义"""
+    if size_pt is not None:
+        run.font.size = Pt(size_pt)
+    if color is not None:
+        run.font.color.rgb = color
     rPr = run._r.get_or_add_rPr()
     rFonts = rPr.find(qn('w:rFonts'))
     if rFonts is None:
@@ -150,8 +154,7 @@ def _set_font_name(run, name='Arial'):
 
 def _add_heading(doc, text, space_before=None, space_after=None):
     """
-    1) 2) 这类 —— 应用 Heading 1 样式（大纲级别1）。
-    外观（字号/粗细）由 Word 样式定义，此处只改字体名为 Arial。
+    1) 2) 这类 —— Heading 1，Arial 12号黑色，大纲级别1。
     """
     p = doc.add_paragraph(style='Heading 1')
     if space_before is not None:
@@ -160,14 +163,14 @@ def _add_heading(doc, text, space_before=None, space_after=None):
         p.paragraph_format.space_after = Pt(space_after)
     p.clear()
     r = p.add_run(text)
-    _set_font_name(r)
+    _set_font_name(r, size_pt=12, color=BLACK)
     return p
 
 
 def _add_sub_item(doc, letter, label, value=None, blue=False):
     """
-    a. b. c. 这类 —— 应用 Heading 2 样式（大纲级别2）。
-    外观由 Word 样式定义，此处只改字体名，需要特殊颜色的 run 单独设 color。
+    a. b. c. 这类 —— Heading 2，Arial 10号黑色，大纲级别2。
+    value 若为蓝色则单独设 color=BLUE。
     """
     p = doc.add_paragraph(style='Heading 2')
     p.paragraph_format.left_indent = Cm(1.27)
@@ -175,15 +178,11 @@ def _add_sub_item(doc, letter, label, value=None, blue=False):
     p.paragraph_format.space_before = Pt(1)
     p.paragraph_format.space_after = Pt(1)
     p.clear()
-    r_letter = p.add_run(f'{letter}  ')
-    _set_font_name(r_letter)
-    r_label = p.add_run(label)
-    _set_font_name(r_label)
+    _set_font_name(p.add_run(f'{letter}  '), size_pt=10, color=BLACK)
+    _set_font_name(p.add_run(label),          size_pt=10, color=BLACK)
     if value:
         r_val = p.add_run(value)
-        _set_font_name(r_val)
-        if blue:
-            r_val.font.color.rgb = BLUE
+        _set_font_name(r_val, size_pt=10, color=BLUE if blue else BLACK)
     return p
 
 
@@ -300,11 +299,8 @@ def _build_section2(doc, data):
     p.paragraph_format.space_before = Pt(10)
     p.paragraph_format.space_after = Pt(4)
     p.clear()
-    r1 = p.add_run('2) Date: ')
-    _set_font_name(r1)
-    r2 = p.add_run(data.get('date', '04/02/2026'))
-    _set_font_name(r2)
-    r2.font.color.rgb = BLUE
+    _set_font_name(p.add_run('2) Date: '), size_pt=12, color=BLACK)
+    _set_font_name(p.add_run(data.get('date', '04/02/2026')), size_pt=12, color=BLUE)
 
 
 def _build_section3(doc, data):
@@ -326,11 +322,9 @@ def _build_section4(doc, data):
     p.paragraph_format.space_before = Pt(10)
     p.paragraph_format.space_after = Pt(4)
     p.clear()
-    r1 = p.add_run('4) Title of Change: ')
-    _set_font_name(r1)
-    r2 = p.add_run(data.get('title_of_change', 'CD DGB chart limit change for CLSR flag'))
-    _set_font_name(r2)
-    r2.font.color.rgb = BLUE
+    _set_font_name(p.add_run('4) Title of Change: '), size_pt=12, color=BLACK)
+    _set_font_name(p.add_run(data.get('title_of_change', 'CD DGB chart limit change for CLSR flag')),
+                   size_pt=12, color=BLUE)
 
 
 def _build_section5_header(doc, data):
