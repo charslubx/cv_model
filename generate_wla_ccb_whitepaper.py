@@ -216,17 +216,17 @@ def _build_section1(doc, data, page_w_cm):
     tbl.autofit = False
     _set_table_total_width(tbl, page_w_cm / 2.54)
 
-    # Row 0: Phase
+    # Row 0: Phase —— 合并为单列，"Phase:  ☐ PWP  ☒ FWP" 全在一个单元格
     _set_row_height(tbl.rows[0], 0.6)
-    c0, c1 = tbl.rows[0].cells
-    c0.width = col0_w
-    c1.width = col1_w
-    _cell_write(c0, 'Phase:', bold=True, valign='center')
-    _set_cell_shading(c0, 'F2F2F2')
-    p1 = _cell_write(c1, '', valign='center')
-    _para_add_run(p1, '☐ PWP')
+    merged0 = tbl.rows[0].cells[0].merge(tbl.rows[0].cells[1])
+    merged0.width = Cm(page_w_cm / 2.54)
+    _set_cell_valign(merged0, 'center')
+    merged0.text = ''
+    p1 = merged0.paragraphs[0]
+    _para_add_run(p1, 'Phase:', bold=True)
+    _para_add_run(p1, '    ☐ PWP')
     _para_add_run(p1, '    ☒ FWP')
-    _set_cell_shading(c1, 'FFFFFF')
+    _set_cell_shading(merged0, 'FFFFFF')
 
     # Row 1: FWP Horizon（合并列）
     _set_row_height(tbl.rows[1], 0.6)
@@ -237,6 +237,7 @@ def _build_section1(doc, data, page_w_cm):
     p = merged1.paragraphs[0]
     _para_add_run(p, 'For a FWP, document the PWP Horizon number (if applicable): ')
     _para_add_run(p, data.get('fwp_horizon', 'N/a'), bold=True, color=BLUE)
+    _set_cell_shading(merged1, 'FFFFFF')
 
     # Row 2: Classification
     _set_row_height(tbl.rows[2], 0.6)
@@ -244,7 +245,7 @@ def _build_section1(doc, data, page_w_cm):
     c0.width = col0_w
     c1.width = col1_w
     _cell_write(c0, 'Classification:', bold=True, valign='center')
-    _set_cell_shading(c0, 'F2F2F2')
+    _set_cell_shading(c0, 'FFFFFF')
     p2 = _cell_write(c1, '', valign='center')
     _para_add_run(p2, '☐ 1   ☐ 2   ☐ 3   ☐ 3N   ☒ 4')
     _set_cell_shading(c1, 'FFFFFF')
@@ -258,6 +259,7 @@ def _build_section1(doc, data, page_w_cm):
     p = merged3.paragraphs[0]
     _para_add_run(p, 'For Class IV WPs, add name of PCCB member confirming classification: ')
     _para_add_run(p, data.get('pccb_member', 'N/A'), bold=True, color=BLUE)
+    _set_cell_shading(merged3, 'FFFFFF')
 
     # Row 4: 参考WP 大标题（合并列，加粗）
     _set_row_height(tbl.rows[4], 0.7)
@@ -269,7 +271,7 @@ def _build_section1(doc, data, page_w_cm):
         'Include any relevant reference white paper(s), "Me-Too" WPs, DRB, MRB, etc. in table below',
         bold=True, valign='center',
     )
-    _set_cell_shading(merged4, 'F2F2F2')
+    _set_cell_shading(merged4, 'FFFFFF')
 
     # 参考WP 子表：Horizon | Title 表头 + N/a 行
     tbl_ref = doc.add_table(rows=2, cols=2)
@@ -1183,6 +1185,45 @@ def _build_rules_legend(doc, page_w_cm):
         _cell_write(c_desc, desc, size_pt=8, valign='center')
 
 
+def _add_page_num_field(para):
+    """在段落末尾插入 PAGE 自动页码域（w:fldChar + w:instrText + w:fldChar）"""
+    run = para.add_run()
+    run.font.size = Pt(9)
+    rPr = run._r.get_or_add_rPr()
+    rFonts = rPr.find(qn('w:rFonts'))
+    if rFonts is None:
+        rFonts = OxmlElement('w:rFonts')
+        rPr.insert(0, rFonts)
+    for attr in ('w:ascii', 'w:hAnsi', 'w:cs'):
+        rFonts.set(qn(attr), 'Arial')
+
+    # begin
+    fc_begin = OxmlElement('w:fldChar')
+    fc_begin.set(qn('w:fldCharType'), 'begin')
+    run._r.append(fc_begin)
+
+    # instrText
+    run2 = para.add_run()
+    run2.font.size = Pt(9)
+    instr = OxmlElement('w:instrText')
+    instr.set(qn('xml:space'), 'preserve')
+    instr.text = ' PAGE '
+    run2._r.append(instr)
+
+    # separate + end
+    run3 = para.add_run()
+    run3.font.size = Pt(9)
+    fc_sep = OxmlElement('w:fldChar')
+    fc_sep.set(qn('w:fldCharType'), 'separate')
+    run3._r.append(fc_sep)
+
+    run4 = para.add_run()
+    run4.font.size = Pt(9)
+    fc_end = OxmlElement('w:fldChar')
+    fc_end.set(qn('w:fldCharType'), 'end')
+    run4._r.append(fc_end)
+
+
 def _build_footer(doc, data):
     """在第一个 section 的页脚写入三栏内容：左-中-右"""
     sec = doc.sections[0]
@@ -1223,7 +1264,9 @@ def _build_footer(doc, data):
     _para_add_run(fp, '\t',        size_pt=9)
     _para_add_run(fp, center_text, size_pt=9)
     _para_add_run(fp, '\t',        size_pt=9)
-    _para_add_run(fp, right_text,  size_pt=9)
+    # "Page " 纯文字 + 自动页码域 fldChar
+    _para_add_run(fp, 'Page ',     size_pt=9)
+    _add_page_num_field(fp)
 
 
 def _apply_doc_settings(doc, page_w_cm=21.59, page_h_cm=27.94):
