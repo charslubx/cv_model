@@ -555,6 +555,197 @@ def _build_change_table(doc, data, page_w_cm):
 # 文档组装
 # ---------------------------------------------------------------------------
 
+def _build_page2(doc, data, page_w_cm):
+    """第二页：第6-9节"""
+    doc.add_page_break()
+    _build_section6(doc, data)
+    _build_section7(doc, data, page_w_cm)
+    _build_section8(doc, data, page_w_cm)
+    _build_section9(doc, data, page_w_cm)
+
+
+def _build_section6(doc, data):
+    """6) Reason for Change"""
+    _add_heading(doc, '6) Reason for Change:')
+    p = doc.add_paragraph()
+    p.paragraph_format.space_before = Pt(4)
+    p.paragraph_format.space_after = Pt(4)
+    _para_add_run(p, data.get('reason_for_change', ''), color=BLUE, size_pt=11)
+
+
+def _build_section7(doc, data, page_w_cm):
+    """
+    7) CEI/Site Implementation Owners
+    表格：CEI Owners | SITE | Date reviewed and approved
+    下方有一个要点说明（bullet）
+    """
+    # 标题：CEI 加下划线
+    p = doc.add_paragraph(style='Heading 1')
+    p.paragraph_format.space_before = Pt(10)
+    p.paragraph_format.space_after = Pt(4)
+    p.clear()
+    _set_font_name(p.add_run('7) '), size_pt=12, color=BLACK)
+    r_cei = p.add_run('CEI')
+    _set_font_name(r_cei, size_pt=12, color=BLACK)
+    r_cei.font.underline = True
+    _set_font_name(p.add_run('/Site Implementation Owners:'), size_pt=12, color=BLACK)
+
+    # 表格：3列
+    total_twip = int(page_w_cm / 2.54 * 1440)
+    col_twips  = [int(total_twip * 0.38), int(total_twip * 0.12),
+                  total_twip - int(total_twip * 0.38) - int(total_twip * 0.12)]
+
+    tbl = doc.add_table(rows=2, cols=3)
+    tbl.style = 'Table Grid'
+    tbl.autofit = False
+    _set_table_total_width(tbl, page_w_cm / 2.54)
+
+    # 表头行
+    _set_row_height(tbl.rows[0], 0.6)
+    headers = ['CEI Owners:', 'SITE', 'Date reviewed and approved:']
+    for j, (txt, tw) in enumerate(zip(headers, col_twips)):
+        c = tbl.rows[0].cells[j]
+        c.width = Cm(tw / 567)
+        _cell_write(c, txt, bold=True, size_pt=10, valign='center')
+        _set_cell_shading(c, 'F2F2F2')
+
+    # 数据行
+    _set_row_height(tbl.rows[1], 0.7)
+    owners = data.get('cei_owners', [{'name': '', 'site': 'CDDP', 'date': ''}])
+    owner  = owners[0] if owners else {}
+    for j, (key, tw) in enumerate(zip(['name', 'site', 'date'], col_twips)):
+        c = tbl.rows[1].cells[j]
+        c.width = Cm(tw / 567)
+        val = owner.get(key, '')
+        color = BLUE if key == 'date' and val else None
+        _cell_write(c, val, size_pt=10, color=color, valign='center')
+        _set_cell_shading(c, 'FFFFFF')
+
+    # 额外 owners 行
+    for owner in owners[1:]:
+        row = tbl.add_row()
+        _set_row_height(row, 0.7)
+        for j, (key, tw) in enumerate(zip(['name', 'site', 'date'], col_twips)):
+            c = row.cells[j]
+            c.width = Cm(tw / 567)
+            val = owner.get(key, '')
+            color = BLUE if key == 'date' and val else None
+            _cell_write(c, val, size_pt=10, color=color, valign='center')
+            _set_cell_shading(c, 'FFFFFF')
+
+    # 要点说明（bullet）
+    note = data.get('cei_note',
+        'Any owners responsible for both FWP and PWP stages.')
+    bp = doc.add_paragraph(style='List Bullet')
+    bp.paragraph_format.space_before = Pt(4)
+    bp.paragraph_format.space_after  = Pt(2)
+    _para_add_run(bp, note, size_pt=10)
+
+
+def _build_section8(doc, data, page_w_cm):
+    """
+    8) Specifications, Controlled Documents Affected
+    标题带括号说明（小字斜体），下方两列表格
+    """
+    # 标题1
+    p = doc.add_paragraph(style='Heading 1')
+    p.paragraph_format.space_before = Pt(10)
+    p.paragraph_format.space_after = Pt(2)
+    p.clear()
+    _set_font_name(p.add_run('8) Specifications, Controlled Documents Affected:'),
+                   size_pt=12, color=BLACK)
+    r_note = p.add_run('  (list all affected by changes above)')
+    _set_font_name(r_note, size_pt=10, color=BLACK)
+    r_note.font.italic = True
+
+    # 两列表格
+    total_twip = int(page_w_cm / 2.54 * 1440)
+    col0_twip  = int(total_twip * 0.45)
+    col1_twip  = total_twip - col0_twip
+
+    tbl = doc.add_table(rows=1, cols=2)
+    tbl.style = 'Table Grid'
+    tbl.autofit = False
+    _set_table_total_width(tbl, page_w_cm / 2.54)
+
+    # 表头
+    _set_row_height(tbl.rows[0], 0.6)
+    for j, (txt, tw) in enumerate(
+            zip(['Spec and/or Controlled Document #', 'Document Title'],
+                [col0_twip, col1_twip])):
+        c = tbl.rows[0].cells[j]
+        c.width = Cm(tw / 567)
+        _cell_write(c, txt, bold=True, size_pt=10,
+                    align=WD_ALIGN_PARAGRAPH.CENTER, valign='center')
+        _set_cell_shading(c, HEADER_BG)
+
+    # 数据行
+    spec_rows = data.get('spec_rows', [{'spec_num': 'N/a', 'title': 'N/a'}])
+    for rec in spec_rows:
+        row = tbl.add_row()
+        _set_row_height(row, 0.6)
+        row.cells[0].width = Cm(col0_twip / 567)
+        row.cells[1].width = Cm(col1_twip / 567)
+        _cell_write(row.cells[0], rec.get('spec_num', ''), size_pt=10, valign='center')
+        _cell_write(row.cells[1], rec.get('title', ''),    size_pt=10, valign='center')
+        _set_cell_shading(row.cells[0], 'FFFFFF')
+        _set_cell_shading(row.cells[1], 'FFFFFF')
+
+
+def _build_section9(doc, data, page_w_cm):
+    """
+    9) Concerns and Considerations
+    5列表格：# | Forum identifying concern | Issue | Resolution | Status
+    """
+    _add_heading(doc, '9) Concerns and Considerations:')
+
+    total_twip = int(page_w_cm / 2.54 * 1440)
+    # 列宽比例：# 小, Forum 适中, Issue 适中, Resolution 最宽, Status 小
+    col_ratios = [0.05, 0.15, 0.20, 0.45, 0.15]
+    col_twips  = [int(total_twip * r) for r in col_ratios]
+    col_twips[-1] = total_twip - sum(col_twips[:-1])   # 最后列补齐误差
+
+    headers = ['#', 'Forum\nidentifying\nconcern', 'Issue', 'Resolution',
+               'Status:\n(Open or\nClosed)']
+
+    tbl = doc.add_table(rows=1, cols=5)
+    tbl.style = 'Table Grid'
+    tbl.autofit = False
+    _set_table_total_width(tbl, page_w_cm / 2.54)
+
+    # 表头行
+    _set_row_height(tbl.rows[0], 1.2)
+    for j, (txt, tw) in enumerate(zip(headers, col_twips)):
+        c = tbl.rows[0].cells[j]
+        c.width = Cm(tw / 567)
+        _cell_write(c, txt, bold=True, size_pt=10,
+                    align=WD_ALIGN_PARAGRAPH.CENTER, valign='center')
+        _set_cell_shading(c, HEADER_BG)
+
+    # 数据行
+    concern_rows = data.get('concern_rows', [])
+    for rec in concern_rows:
+        row = tbl.add_row()
+        _set_row_height(row, 1.5)
+        for j, tw in enumerate(col_twips):
+            row.cells[j].width = Cm(tw / 567)
+
+        keys = ['number', 'forum', 'issue', 'resolution', 'status']
+        blue_cols = {0, 1, 4}   # #/Forum/Status 用蓝色
+        for j, key in enumerate(keys):
+            val = rec.get(key, '')
+            color = BLUE if (j in blue_cols and val) else None
+            _cell_write(row.cells[j], val, size_pt=10,
+                        color=color, valign='top')
+
+    # 若无数据行，补两个空行
+    if not concern_rows:
+        for _ in range(2):
+            row = tbl.add_row()
+            _set_row_height(row, 0.8)
+            for j, tw in enumerate(col_twips):
+                row.cells[j].width = Cm(tw / 567)
+
 def _build_footer(doc, data):
     """在第一个 section 的页脚写入三栏内容：左-中-右"""
     sec = doc.sections[0]
@@ -650,6 +841,7 @@ def build_wla_ccb_document(data: dict) -> bytes:
     _build_section4(doc, data)
     _build_section5_header(doc, data)
     _build_change_table(doc, data, page_w_cm)
+    _build_page2(doc, data, page_w_cm)
     _build_footer(doc, data)
 
     buf = io.BytesIO()
@@ -676,6 +868,25 @@ def main():
         'footer_left':   'Intel Confidential',
         'footer_center': 'WLA CCB Monitor Change White Paper',
         'footer_right':  'Rev 1.0',
+        'reason_for_change': 'To tighten the limit for CLSR flagging',
+        'cei_owners': [
+            {'name': 'Owner A', 'site': 'CDDP', 'date': '04/02/2026'},
+        ],
+        'cei_note': 'Any owners responsible for both FWP and PWP stages.',
+        'spec_rows': [
+            {'spec_num': 'N/a', 'title': 'N/a'},
+        ],
+        'concern_rows': [
+            {'number': '1', 'forum': 'Originator', 'issue': 'Limit too wide?',
+             'resolution': 'Reviewed data, new limit approved by team.',
+             'status': 'Closed'},
+            {'number': '2', 'forum': 'Module WG', 'issue': 'Will this impact yield?',
+             'resolution': 'No impact confirmed. Change targeted at flag reduction.',
+             'status': 'Closed'},
+            {'number': '3', 'forum': 'Originator', 'issue': 'Need CDDP sign-off?',
+             'resolution': 'CDDP reviewed and approved.',
+             'status': 'Closed'},
+        ],
         'change_rows': [
             {
                 'number': '1',
