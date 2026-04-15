@@ -948,6 +948,128 @@ def _build_section10(doc, data, page_w_cm):
     # ---------- d. Control Chart Data Summary ----------
     _add_sub_item(doc, 'd.', 'Control Chart Data Summary:')
 
+    # d 的说明文字
+    p_d = doc.add_paragraph()
+    p_d.paragraph_format.space_before = Pt(2)
+    p_d.paragraph_format.space_after  = Pt(4)
+    _para_add_run(p_d, data.get('data_summary_note',
+        'Select type of limits, and explain assumptions. Expect ☒ for CEI monitor sets, '
+        'with VF-Common limits, except where required for local calibration wafer sets, '
+        'or where both matching data and Fab-specific deviation.'),
+        size_pt=10)
+
+    # d 的 3行×2列复选框表格（Tool-Specific / Fab-Specific / VF-Common）
+    ds_sel = data.get('data_summary_type', 'vf_common')
+    ds_options = [
+        ('tool_specific', 'Tool-Specific'),
+        ('fab_specific',  'Fab-Specific  (First time CEI deviation need to show justification of why fabs are different)'),
+        ('vf_common',     'VF-Common'),
+    ]
+    tbl_d = doc.add_table(rows=len(ds_options), cols=2)
+    tbl_d.autofit = False
+    _set_table_no_borders(tbl_d)
+    _set_table_indent(tbl_d, 2.54)
+    ds_cb_tw    = int(0.3  * 1440)
+    ds_label_tw = int(4.5  * 1440)
+    _set_table_total_width(tbl_d, (ds_cb_tw + ds_label_tw) / 1440)
+    for i, (key, label) in enumerate(ds_options):
+        row = tbl_d.rows[i]
+        mark = '☒' if ds_sel == key else '☐'
+        c0 = row.cells[0]
+        c0.width = Cm(ds_cb_tw / 567)
+        _set_cell_no_padding(c0)
+        _cell_write(c0, mark, size_pt=10, align=WD_ALIGN_PARAGRAPH.CENTER, valign='center')
+        c1 = row.cells[1]
+        c1.width = Cm(ds_label_tw / 567)
+        _set_cell_no_padding(c1)
+        _cell_write(c1, label, size_pt=10, valign='center')
+
+
+def _build_section11(doc, data, page_w_cm):
+    """
+    11) Specific Checklists
+    说明文字 + 4行×3列表格（Item / Embedded Document(s) / Comments）
+    """
+    _add_heading(doc, '11) Specific Checklists:')
+
+    p = doc.add_paragraph()
+    p.paragraph_format.space_before = Pt(2)
+    p.paragraph_format.space_after  = Pt(4)
+    _para_add_run(p, data.get('checklist_note',
+        'Attach all appropriate checklists. Applicable checklist and worksheet to be obtained from '
+        '"Handbook and Templates".'),
+        size_pt=10)
+
+    total_twip = int(page_w_cm / 2.54 * 1440)
+    col0_tw = int(total_twip * 0.38)
+    col1_tw = int(total_twip * 0.32)
+    col2_tw = total_twip - col0_tw - col1_tw
+
+    checklist_rows = data.get('checklist_rows', [
+        {'item': 'APC Add/Change Checklist',           'doc': 'N/A', 'comments': ''},
+        {'item': 'Software/Firmware Change Checklist', 'doc': 'N/A', 'comments': ''},
+        {'item': 'Monitor Sampling Reduction Worksheet','doc': 'N/A', 'comments': ''},
+        {'item': 'Other:',                             'doc': 'N/A', 'comments': ''},
+    ])
+
+    tbl = doc.add_table(rows=1 + len(checklist_rows), cols=3)
+    tbl.style = 'Table Grid'
+    tbl.autofit = False
+    _set_table_total_width(tbl, page_w_cm / 2.54)
+
+    # 表头
+    for j, (txt, tw) in enumerate(zip(
+            ['Item', 'Embedded Document(s)', 'Comments'],
+            [col0_tw, col1_tw, col2_tw])):
+        c = tbl.rows[0].cells[j]
+        c.width = Cm(tw / 567)
+        _cell_write(c, txt, bold=True, size_pt=10,
+                    align=WD_ALIGN_PARAGRAPH.CENTER, valign='center')
+        _set_cell_shading(c, HEADER_BG)
+
+    # 数据行
+    for i, rec in enumerate(checklist_rows):
+        row = tbl.rows[i + 1]
+        for j, (key, tw) in enumerate(zip(
+                ['item', 'doc', 'comments'],
+                [col0_tw, col1_tw, col2_tw])):
+            c = row.cells[j]
+            c.width = Cm(tw / 567)
+            val = rec.get(key, '')
+            color = BLUE if key == 'doc' and val and val != '' else None
+            _cell_write(c, val, size_pt=10, color=color,
+                        align=WD_ALIGN_PARAGRAPH.CENTER if key == 'doc' else WD_ALIGN_PARAGRAPH.LEFT,
+                        valign='center')
+            _set_cell_shading(c, 'FFFFFF')
+
+
+def _build_section12(doc, data):
+    """
+    12) Data Details
+    标题 + 括号说明文字（正文）+ 数据内容区（可选）
+    """
+    _add_heading(doc, '12) Data Details')
+
+    p = doc.add_paragraph()
+    p.paragraph_format.space_before = Pt(2)
+    p.paragraph_format.space_after  = Pt(6)
+    _para_add_run(p, data.get('data_details_note',
+        '(Include and clearly label all tables, key graphs and data summaries that support the intended '
+        'change, additionally summarize and document, including data as an attachment is strongly preferred.)'),
+        size_pt=10, italic=True)
+
+    # 可选：若有 data_details_items 则逐条输出（蓝色标题+图表占位）
+    for item in data.get('data_details_items', []):
+        p_item = doc.add_paragraph()
+        p_item.paragraph_format.space_before = Pt(4)
+        p_item.paragraph_format.space_after  = Pt(2)
+        _para_add_run(p_item, item.get('title', ''), bold=True, color=BLUE, size_pt=10)
+        if item.get('description'):
+            p_desc = doc.add_paragraph()
+            p_desc.paragraph_format.space_before = Pt(0)
+            p_desc.paragraph_format.space_after  = Pt(4)
+            _para_add_run(p_desc, item['description'], size_pt=10)
+
 
 def _build_spc15_table(doc, data_rows, page_w_cm, prefix='setup'):
     """
@@ -1159,6 +1281,8 @@ def build_wla_ccb_document(data: dict) -> bytes:
     _build_section5_fwp_table(doc, data, page_w_cm)
     _build_page2(doc, data, page_w_cm)
     _build_section10(doc, data, page_w_cm)
+    _build_section11(doc, data, page_w_cm)
+    _build_section12(doc, data)
     _build_footer(doc, data)
 
     buf = io.BytesIO()
@@ -1243,6 +1367,21 @@ def main():
                     {'label': 'CLSR',       'present': '',     'proposed': ''},
                 ],
             },
+        ],
+        'data_summary_type': 'vf_common',
+        'checklist_rows': [
+            {'item': 'APC Add/Change Checklist',            'doc': 'N/A', 'comments': ''},
+            {'item': 'Software/Firmware Change Checklist',  'doc': 'N/A', 'comments': ''},
+            {'item': 'Monitor Sampling Reduction Worksheet','doc': 'N/A', 'comments': ''},
+            {'item': 'Other:',                              'doc': 'N/A', 'comments': ''},
+        ],
+        'data_details_items': [
+            {'title': '1. X-bar Control Limit Summary for "Value" (Statistical)',
+             'description': ''},
+            {'title': '2. X-bar_CG',
+             'description': ''},
+            {'title': '3. X-bar_LG',
+             'description': ''},
         ],
     }
 
