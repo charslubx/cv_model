@@ -138,22 +138,28 @@ def _para_add_run(para, text, font_name='Arial', size_pt=11,
 
 
 def _add_heading(doc, text, size_pt=11, space_before=6, space_after=4):
-    """1) 2) 这类标题1：加粗"""
-    p = doc.add_paragraph()
+    """1) 2) 这类 —— 应用 Heading 1 样式，覆盖字体为 Arial"""
+    p = doc.add_paragraph(style='Heading 1')
     p.paragraph_format.space_before = Pt(space_before)
     p.paragraph_format.space_after = Pt(space_after)
+    p.clear()
     r = p.add_run(text)
     _set_run_font(r, size_pt=size_pt, bold=True)
     return p
 
 
-def _add_sub_heading(doc, text, size_pt=11, space_before=4, space_after=2):
-    """a) b) 这类标题2：正常粗细"""
-    p = doc.add_paragraph()
-    p.paragraph_format.space_before = Pt(space_before)
-    p.paragraph_format.space_after = Pt(space_after)
-    r = p.add_run(text)
-    _set_run_font(r, size_pt=size_pt)
+def _add_sub_item(doc, letter, label, value=None, blue=False):
+    """a. b. c. 这类 —— 应用 Heading 2 样式，覆盖字体为 Arial"""
+    p = doc.add_paragraph(style='Heading 2')
+    p.paragraph_format.left_indent = Cm(1.27)
+    p.paragraph_format.first_line_indent = Cm(-0.63)
+    p.paragraph_format.space_before = Pt(1)
+    p.paragraph_format.space_after = Pt(1)
+    p.clear()
+    _para_add_run(p, f'{letter}  ')
+    _para_add_run(p, label)
+    if value:
+        _para_add_run(p, value, bold=True, color=(BLUE if blue else None))
     return p
 
 
@@ -265,10 +271,11 @@ def _build_section1(doc, data, page_w_cm):
 
 
 def _build_section2(doc, data):
-    """2) Date —— 标题1 加粗"""
-    p = doc.add_paragraph()
+    """2) Date —— Heading 1"""
+    p = doc.add_paragraph(style='Heading 1')
     p.paragraph_format.space_before = Pt(10)
     p.paragraph_format.space_after = Pt(4)
+    p.clear()
     _para_add_run(p, '2) Date: ', bold=True)
     _para_add_run(p, data.get('date', '04/02/2026'), bold=True, color=BLUE)
 
@@ -283,48 +290,33 @@ def _build_section3(doc, data):
         ('c.', 'Co-author(s):',               data.get('co_authors', ''),             False),
     ]
     for letter, label, value, blue in items:
-        p = doc.add_paragraph()
-        p.paragraph_format.left_indent = Cm(1.27)
-        p.paragraph_format.first_line_indent = Cm(-0.63)
-        p.paragraph_format.space_before = Pt(1)
-        p.paragraph_format.space_after = Pt(1)
-        _para_add_run(p, f'{letter}  ')   # 标题2：普通粗细
-        _para_add_run(p, label)
-        if value:
-            _para_add_run(p, value, bold=True, color=(BLUE if blue else None))
+        _add_sub_item(doc, letter, label, value=value, blue=blue)
 
 
 def _build_section4(doc, data):
-    """4) Title of Change —— 标题1 加粗"""
-    p = doc.add_paragraph()
+    """4) Title of Change —— Heading 1"""
+    p = doc.add_paragraph(style='Heading 1')
     p.paragraph_format.space_before = Pt(10)
     p.paragraph_format.space_after = Pt(4)
+    p.clear()
     _para_add_run(p, '4) Title of Change: ', bold=True)
     _para_add_run(p, data.get('title_of_change', 'CD DGB chart limit change for CLSR flag'),
                   bold=True, color=BLUE)
 
 
 def _build_section5_header(doc, data):
-    """5) Change Description 标题1（加粗） + a/b/c 标题2（普通）"""
+    """5) Change Description —— Heading 1 + a/b/c Heading 2"""
     _add_heading(doc, '5) Change Description:', space_before=10)
 
     sub_items = [
         ('a.', 'Equipment tool set affected (entity code or CEID): ',
-         data.get('equipment_tool_set', '[Tool Set / CEID]')),
+         data.get('equipment_tool_set', '[Tool Set / CEID]'), True),
         ('b.', 'Products affected (if change is product specific, otherwise "All"): ',
-         data.get('products_affected', '[Products]')),
-        ('c.', 'Specific change items.', None),
+         data.get('products_affected', '[Products]'), True),
+        ('c.', 'Specific change items.', None, False),
     ]
-    for letter, label, value in sub_items:
-        p = doc.add_paragraph()
-        p.paragraph_format.left_indent = Cm(1.27)
-        p.paragraph_format.first_line_indent = Cm(-0.63)
-        p.paragraph_format.space_before = Pt(1)
-        p.paragraph_format.space_after = Pt(1)
-        _para_add_run(p, f'{letter}  ')   # 标题2：普通粗细
-        _para_add_run(p, label)
-        if value:
-            _para_add_run(p, value, bold=True, color=BLUE)
+    for letter, label, value, blue in sub_items:
+        _add_sub_item(doc, letter, label, value=value, blue=blue)
 
 
 def _set_table_no_borders(tbl):
