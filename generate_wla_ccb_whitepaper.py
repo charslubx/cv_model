@@ -1077,7 +1077,7 @@ def _build_spc15_table(doc, data_rows, page_w_cm, prefix='setup'):
             hdr_clean = hdr.replace('\n', '')
             _cell_write(c, hdr_clean, bold=True, size_pt=7,
                         align=1, valign='center')
-            _set_cell_text_direction(c, 'btLr')
+            _set_cell_text_direction(c, 'tbRl')
         else:
             _cell_write(c, hdr, bold=True, size_pt=7,
                         align=1, valign='center')
