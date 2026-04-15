@@ -303,19 +303,20 @@ def _build_section1(doc, data, page_w_cm):
     _para_add_run(p, data.get('fwp_horizon', 'N/a'), bold=True, color=BLUE)
     _set_cell_shading(merged1, 'FFFFFF')
 
-    # Row 2: Classification
+    # Row 2: Classification —— 合并为单列
     _set_row_height(tbl.rows[2], 0.6)
-    c0, c1 = tbl.rows[2].cells
-    c0.width = col0_w
-    c1.width = col1_w
-    _cell_write(c0, 'Classification:', bold=True, valign='center')
-    _set_cell_shading(c0, 'FFFFFF')
-    p2 = _cell_write(c1, '', valign='center')
+    merged2 = tbl.rows[2].cells[0].merge(tbl.rows[2].cells[1])
+    merged2.width = Cm(page_w_cm / 2.54)
+    _set_cell_valign(merged2, 'center')
+    merged2.text = ''
+    p2 = merged2.paragraphs[0]
+    _para_add_run(p2, 'Classification:', bold=True)
+    _para_add_run(p2, '    ')
     for label, is_checked in [('1', False), ('2', False), ('3', False),
                                ('3N', False), ('4', True)]:
         _append_checkbox(p2, checked=is_checked, label=label)
         _para_add_run(p2, '   ')
-    _set_cell_shading(c1, 'FFFFFF')
+    _set_cell_shading(merged2, 'FFFFFF')
 
     # Row 3: Class IV PCCB（合并列）
     _set_row_height(tbl.rows[3], 0.6)
